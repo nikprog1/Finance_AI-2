@@ -1,0 +1,4 @@
+# Опционально: для блока «Сгенерировано ИИ» (локальная Llama).
+# Установка: pip install -r requirements-llm.txt
+# Модель GGUF положить в %USERPROFILE%\.bank_analyzer\models\
+llama-cpp-python>=0.2.0

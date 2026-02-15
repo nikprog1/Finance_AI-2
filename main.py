@@ -4,7 +4,7 @@ Bank Statement Analyzer MVP — главное окно PyQt5.
 """
 import sqlite3
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QLabel,
     QFrame,
+    QPushButton,
 )
 from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -32,6 +33,26 @@ import csv_import
 import financial_agent
 
 CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории"]
+
+
+class LLMWorker(QObject):
+    """Воркер для вызова LLM в фоне (не блокирует UI)."""
+    finished = pyqtSignal(object)  # str | None
+
+    def __init__(self):
+        super().__init__()
+        self.metrics = None
+
+    def do_work(self):
+        if self.metrics is None:
+            self.finished.emit(None)
+            return
+        try:
+            from llm_agent import get_agent
+            result = get_agent().generate_advice(self.metrics)
+            self.finished.emit(result)
+        except Exception:
+            self.finished.emit(None)
 
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -115,7 +136,28 @@ class MainWindow(QMainWindow):
         self.recommendations_scroll.setWidget(self.recommendations_content)
         self.recommendations_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         rec_layout.addWidget(self.recommendations_scroll, 1)
+        # Блок «Сгенерировано ИИ» и кнопка запроса
+        self.llm_section = QFrame()
+        llm_layout = QVBoxLayout(self.llm_section)
+        llm_title = QLabel("Сгенерировано ИИ")
+        llm_title.setFont(QFont(llm_title.font().family(), 9, QFont.Bold))
+        llm_layout.addWidget(llm_title)
+        self.llm_advice_label = QLabel("Нажмите «Запросить совет ИИ» для генерации.")
+        self.llm_advice_label.setWordWrap(True)
+        self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
+        llm_layout.addWidget(self.llm_advice_label)
+        self.llm_request_btn = QPushButton("Запросить совет ИИ")
+        self.llm_request_btn.clicked.connect(self._on_request_llm_advice)
+        llm_layout.addWidget(self.llm_request_btn)
+        rec_layout.addWidget(self.llm_section)
         table_and_panel.addWidget(self.recommendations_panel)
+
+        # Поток для вызова LLM
+        self._llm_thread = QThread()
+        self._llm_worker = LLMWorker()
+        self._llm_worker.moveToThread(self._llm_thread)
+        self._llm_thread.started.connect(self._llm_worker.do_work)
+        self._llm_worker.finished.connect(self._on_llm_finished)
 
         self.tabs.addTab(self.table_tab, "Транзакции")
 
@@ -181,6 +223,26 @@ class MainWindow(QMainWindow):
                 why_label.setStyleSheet("color: gray; font-size: 11px;")
                 self.recommendations_content_layout.addWidget(why_label)
                 self.recommendations_content_layout.addSpacing(12)
+        # Блок «Сгенерировано ИИ» не очищается — он ниже scroll и обновляется по кнопке
+
+    def _on_request_llm_advice(self):
+        """Запуск генерации совета ИИ в фоновом потоке."""
+        self.llm_request_btn.setEnabled(False)
+        self.llm_advice_label.setText("Генерация…")
+        self._llm_worker.metrics = financial_agent.build_llm_metrics(self._conn)
+        self._llm_thread.start()
+
+    def _on_llm_finished(self, text):
+        """Обновление блока ИИ после завершения потока (вызывается в main thread по сигналу)."""
+        self._llm_thread.quit()
+        self._llm_thread.wait()
+        self.llm_request_btn.setEnabled(True)
+        if text:
+            self.llm_advice_label.setText(text)
+            self.llm_advice_label.setStyleSheet("font-size: 11px;")
+        else:
+            self.llm_advice_label.setText("Модель не загружена или недостаточно данных.")
+            self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
 
     def _on_remove_duplicates(self):
         """Удалить дубликаты транзакций (по дате, описанию, сумме, номеру карты), обновить таблицу и рекомендации."""

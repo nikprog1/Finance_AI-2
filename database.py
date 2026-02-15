@@ -162,6 +162,17 @@ def get_income_last_30_days(conn: sqlite3.Connection) -> float:
     return float(cur.fetchone()[0] or 0)
 
 
+def get_total_expenses_last_30_days(conn: sqlite3.Connection) -> float:
+    """Сумма расходов (amount < 0, по модулю) за последние 30 дней."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+        WHERE amount < 0 AND date >= date('now', '-30 days')
+        """
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
 def get_expense_sum_by_category_group(
     conn: sqlite3.Connection,
     days: int,

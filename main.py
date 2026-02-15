@@ -12,18 +12,24 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QTableView,
     QToolBar,
     QFileDialog,
     QComboBox,
     QStyledItemDelegate,
     QAbstractItemView,
+    QScrollArea,
+    QLabel,
+    QFrame,
 )
+from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 import database as db
 import csv_import
+import financial_agent
 
 CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории"]
 
@@ -79,9 +85,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        # Вкладка «Транзакции»
+        # Вкладка «Транзакции» — таблица слева, панель рекомендаций справа
         self.table_tab = QWidget()
-        self.table_layout = QVBoxLayout(self.table_tab)
+        table_and_panel = QHBoxLayout(self.table_tab)
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Дата", "Номер карты", "Описание", "Сумма", "Категория"])
         self.table = QTableView()
@@ -90,7 +96,27 @@ class MainWindow(QMainWindow):
         self.table.setItemDelegateForColumn(4, CategoryDelegate(self))
         self.table_tab._delegate = self.table.itemDelegateForColumn(4)
         self.table_tab._delegate._conn = conn
-        self.table_layout.addWidget(self.table)
+        table_and_panel.addWidget(self.table, 1)
+
+        # Панель рекомендаций (справа, ~300 px)
+        self.recommendations_panel = QFrame()
+        self.recommendations_panel.setMinimumWidth(300)
+        self.recommendations_panel.setMaximumWidth(320)
+        self.recommendations_panel.setFrameShape(QFrame.StyledPanel)
+        rec_layout = QVBoxLayout(self.recommendations_panel)
+        rec_title = QLabel("Финансовые советы")
+        rec_title.setFont(QFont(rec_title.font().family(), 10, QFont.Bold))
+        rec_layout.addWidget(rec_title)
+        self.recommendations_scroll = QScrollArea()
+        self.recommendations_scroll.setWidgetResizable(True)
+        self.recommendations_content = QWidget()
+        self.recommendations_content_layout = QVBoxLayout(self.recommendations_content)
+        self.recommendations_content_layout.setAlignment(Qt.AlignTop)
+        self.recommendations_scroll.setWidget(self.recommendations_content)
+        self.recommendations_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        rec_layout.addWidget(self.recommendations_scroll, 1)
+        table_and_panel.addWidget(self.recommendations_panel)
+
         self.tabs.addTab(self.table_tab, "Транзакции")
 
         # Вкладка «Графики» — один холст с двумя subplot
@@ -102,9 +128,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.charts_tab, "Графики")
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        # При запуске удаляем дубликаты (дата + описание + сумма), затем загружаем таблицу
+        # При запуске удаляем дубликаты (дата + описание + сумма), затем загружаем таблицу и рекомендации
         db.remove_duplicates(self._conn)
         self._reload_table()
+        self._refresh_recommendations()
         self._refresh_charts()
 
     def _reload_table(self):
@@ -128,9 +155,35 @@ class MainWindow(QMainWindow):
                 it = self.model.item(r, c)
                 if it:
                     it.setEditable(False)
+        self._refresh_recommendations()
+
+    def _refresh_recommendations(self):
+        """Обновить панель рекомендаций AI-агента."""
+        # Очистить текущее содержимое
+        while self.recommendations_content_layout.count():
+            child = self.recommendations_content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        recs = financial_agent.get_recommendations(self._conn)
+        if not recs:
+            hint = QLabel("Недостаточно данных для анализа.\nЗагрузите CSV с транзакциями.")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: gray;")
+            self.recommendations_content_layout.addWidget(hint)
+        else:
+            for rec in recs:
+                text_label = QLabel(rec.text)
+                text_label.setWordWrap(True)
+                text_label.setFont(QFont(text_label.font().family(), 9, QFont.Bold))
+                self.recommendations_content_layout.addWidget(text_label)
+                why_label = QLabel("Почему это важно?\n" + rec.why)
+                why_label.setWordWrap(True)
+                why_label.setStyleSheet("color: gray; font-size: 11px;")
+                self.recommendations_content_layout.addWidget(why_label)
+                self.recommendations_content_layout.addSpacing(12)
 
     def _on_remove_duplicates(self):
-        """Удалить дубликаты транзакций (по дате, описанию, сумме, номеру карты), обновить таблицу."""
+        """Удалить дубликаты транзакций (по дате, описанию, сумме, номеру карты), обновить таблицу и рекомендации."""
         deleted = db.remove_duplicates(self._conn)
         self._reload_table()
         self._refresh_charts()
@@ -147,7 +200,7 @@ class MainWindow(QMainWindow):
             return
         try:
             n = csv_import.import_from_csv(self._conn, path)
-            self._reload_table()
+            self._reload_table()  # также обновляет рекомендации
             self.statusBar().showMessage(f"Загружено записей: {n}")
         except Exception as e:
             self.statusBar().showMessage(f"Ошибка: {e}")

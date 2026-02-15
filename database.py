@@ -149,3 +149,66 @@ def get_expenses_by_day_last_week(
         """
     )
     return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def get_income_last_30_days(conn: sqlite3.Connection) -> float:
+    """Сумма доходов (amount > 0) за последние 30 дней."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount), 0) FROM transactions
+        WHERE amount > 0 AND date >= date('now', '-30 days')
+        """
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
+def get_expense_sum_by_category_group(
+    conn: sqlite3.Connection,
+    days: int,
+    category_groups: dict[str, list[str]],
+) -> dict[str, float]:
+    """
+    Сумма расходов по именованным группам категорий.
+    category_groups: {"подписки": ["Цифровые товары", ...], ...}
+    Возвращает {"подписки": 1500.0, ...} (только amount < 0).
+    """
+    result: dict[str, float] = {name: 0.0 for name in category_groups}
+    for group_name, categories in category_groups.items():
+        if not categories:
+            continue
+        placeholders = ",".join("?" * len(categories))
+        cur = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+            WHERE amount < 0
+              AND date >= date('now', ?)
+              AND category IN ({placeholders})
+            """,
+            (f"-{days} days",) + tuple(categories),
+        )
+        result[group_name] = float(cur.fetchone()[0] or 0)
+    return result
+
+
+def get_expense_trend_weekly(conn: sqlite3.Connection) -> tuple[float, float]:
+    """
+    (сумма расходов за последние 7 дней, сумма расходов за 7 дней до этого).
+    Для сравнения тренда неделя vs предыдущая неделя.
+    """
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+        WHERE amount < 0 AND date >= date('now', '-7 days')
+        """
+    )
+    this_week = float(cur.fetchone()[0] or 0)
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+        WHERE amount < 0
+          AND date >= date('now', '-14 days')
+          AND date < date('now', '-7 days')
+        """
+    )
+    last_week = float(cur.fetchone()[0] or 0)
+    return (this_week, last_week)

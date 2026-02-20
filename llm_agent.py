@@ -1,26 +1,24 @@
 """
-Локальный LLM-агент для финансовых советов (Llama-3.1-8B-Instruct, GGUF).
-Работает оффлайн через llama-cpp-python. Fallback на OpenAI API при OPENAI_API_KEY.
+Облачной LLM-агент для финансовых советов (OpenRouter / OpenAI-compatible API).
+Работает через httpx, конфигурация из .env.
 """
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# Опциональный импорт — приложение работает без llama-cpp-python
-try:
-    from llama_cpp import Llama
-    _LLAMA_AVAILABLE = True
-except ImportError:
-    Llama = None
-    _LLAMA_AVAILABLE = False
-
-# Путь к модели по умолчанию
-MODELS_DIR = Path.home() / ".bank_analyzer" / "models"
-DEFAULT_MODEL_NAME = "llama-3.1-8b-instruct-q4_k_m.gguf"
+# Конфигурация из .env
+LLM_API_URL = os.environ.get(
+    "LLM_API_URL",
+    (os.environ.get("NEXT_PUBLIC_APP_URL") or "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
+)
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "") or os.environ.get("OPENROUTER_API_KEY", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", "z-ai/glm-4.5-air")
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "60"))
 
 SYSTEM_PROMPT = """Ты — финансовый консультант. Твоя задача — дать ОДИН краткий совет (1–2 предложения) на основе анонимизированных метрик.
 Правила: не выдумывай числа; говори только о том, что явно следует из данных; не давай медицинских или юридических рекомендаций; пиши на русском."""
@@ -32,141 +30,131 @@ USER_PROMPT_TEMPLATE = """Ниже — агрегированные метрик
 Дай один конкретный совет по управлению финансами. Только текст совета, без преамбулы."""
 
 
-def _generate_via_openai(metrics: dict[str, Any]) -> str | None:
-    """Fallback на OpenAI API при наличии OPENAI_API_KEY. Возвращает совет или None."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
-        user_content = USER_PROMPT_TEMPLATE.format(json_metrics=json_metrics)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            max_tokens=150,
-            temperature=0.3,
-        )
-        text = (response.choices or [{}])[0].message.content
-        return text.strip() if text else None
-    except ImportError:
-        logger.warning("openai не установлен; pip install openai")
-        return None
-    except Exception as e:
-        logger.exception("Ошибка OpenAI API: %s", e)
-        return None
-
-
-def _build_prompt(metrics: dict[str, Any]) -> str:
-    """Собирает промпт для Llama 3.1 Instruct (chat-формат)."""
-    json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
-    user_part = USER_PROMPT_TEMPLATE.format(json_metrics=json_metrics)
-    # Llama 3.1 chat format
-    prompt = (
-        "<|begin_of_text|>"
-        "<|start_header_id|>system<|end_header_id|>\n\n"
-        f"{SYSTEM_PROMPT}<|eot_id|>"
-        "<|start_header_id|>user<|end_header_id|>\n\n"
-        f"{user_part}<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n"
-    )
-    return prompt
-
-
 def get_setup_instructions() -> str:
-    """Инструкция по установке локальной модели для показа пользователю."""
+    """Инструкция по настройке Cloud API для показа пользователю."""
     return (
-        "Локальная модель не загружена.\n\n"
-        "1. pip install -r requirements-llm.txt\n"
-        f"2. Скачайте GGUF-модель (llama-3.1-8b-instruct) и поместите в:\n   {MODELS_DIR}\n"
-        f"3. Имя файла: {DEFAULT_MODEL_NAME}\n\n"
-        "Либо: pip install openai и задайте OPENAI_API_KEY для облачного совета."
+        "Облачный LLM не настроен.\n\n"
+        "Добавьте в .env или .env.local:\n"
+        "  LLM_API_KEY=sk-your-key\n"
+        "  LLM_API_URL=https://openrouter.ai/api/v1/chat/completions\n"
+        "  LLM_MODEL=openai/gpt-4o-mini\n\n"
+        "Ключ: https://openrouter.ai/keys или https://platform.openai.com/api-keys"
     )
 
 
-class LlamaAgent:
+class CloudAgent:
     """
-    Обёртка над llama-cpp-python для генерации финансовых советов.
-    Lazy init: модель загружается при первом вызове ensure_loaded() / generate_advice().
+    Агент для генерации финансовых советов через облачный API (OpenAI-совместимый).
     """
 
-    def __init__(self, model_path: str | Path | None = None):
-        if model_path is None:
-            model_path = MODELS_DIR / DEFAULT_MODEL_NAME
-        self.model_path = Path(model_path)
-        self._llama: Any = None
-        self._load_attempted = False
+    def __init__(self):
         self._failure_reason: str = ""
 
-    def ensure_loaded(self) -> bool:
-        """
-        Загружает модель при первом вызове. Возвращает True при успехе, False при ошибке.
-        """
-        if self._llama is not None:
-            return True
-        if self._load_attempted:
-            return False
-        self._load_attempted = True
-        if not _LLAMA_AVAILABLE:
-            self._failure_reason = "llama-cpp-python не установлен"
-            logger.warning("llama-cpp-python не установлен; ИИ-совет недоступен.")
-            return False
-        if not self.model_path.is_file():
-            self._failure_reason = f"Модель не найдена: {self.model_path}"
-            logger.warning("Модель не найдена: %s", self.model_path)
-            return False
-        try:
-            self._llama = Llama(
-                model_path=str(self.model_path),
-                n_ctx=2048,
-                n_threads=2,
-                verbose=False,
-            )
-            return True
-        except Exception as e:
-            self._failure_reason = str(e)
-            logger.exception("Ошибка загрузки модели: %s", e)
-            return False
-
     def get_failure_reason(self) -> str:
-        """Причина, по которой модель недоступна (после неудачного ensure_loaded)."""
+        """Причина последней ошибки."""
         return self._failure_reason or "Неизвестная ошибка"
 
     def generate_advice(self, metrics: dict[str, Any]) -> str | None:
         """
-        Строит промпт из метрик, вызывает модель (локальная Llama или OpenAI), возвращает текст совета или None.
+        Формирует промпт из метрик, отправляет запрос к API, возвращает текст совета или None.
         """
-        if self.ensure_loaded():
-            prompt = _build_prompt(metrics)
-            try:
-                out = self._llama(
-                    prompt,
-                    max_tokens=150,
-                    temperature=0.3,
-                    stop=["<|eot_id|>", "\n\n"],
-                    echo=False,
-                )
-                text = (out.get("choices") or [{}])[0].get("text", "").strip()
-                return text if text else None
-            except Exception as e:
-                logger.exception("Ошибка генерации совета: %s", e)
+        api_key = (LLM_API_KEY or "").strip()
+        if not api_key:
+            self._failure_reason = "API-ключ не найден. Задайте LLM_API_KEY или OPENROUTER_API_KEY в .env"
+            logger.warning(self._failure_reason)
+            return None
+
+        json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
+        user_content = USER_PROMPT_TEMPLATE.format(json_metrics=json_metrics)
+
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 80,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            logger.debug("Отправка запроса к %s, модель %s", LLM_API_URL, LLM_MODEL)
+            with httpx.Client(timeout=LLM_TIMEOUT) as client:
+                response = client.post(LLM_API_URL, headers=headers, json=payload)
+
+            # Обработка HTTP-ошибок до raise_for_status
+            if response.status_code == 402:
+                self._failure_reason = "Недостаточно кредитов. Проверьте баланс на https://openrouter.ai/settings/credits"
+                logger.warning(self._failure_reason)
                 return None
 
-        # Fallback на OpenAI API
-        return _generate_via_openai(metrics)
+            if response.status_code == 404:
+                try:
+                    err = response.json()
+                    msg = err.get("error", {}).get("message", "")
+                except Exception:
+                    msg = response.text[:200]
+                self._failure_reason = f"Модель не найдена: {LLM_MODEL}. {msg}"
+                logger.warning(self._failure_reason)
+                return None
+
+            if response.status_code == 400:
+                try:
+                    err = response.json()
+                    msg = err.get("error", {}).get("message", response.text[:200])
+                except Exception:
+                    msg = response.text[:200]
+                self._failure_reason = f"Неверный запрос: {msg}"
+                logger.warning(self._failure_reason)
+                return None
+
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After", "")
+                extra = f" Подождите {retry_after} сек." if retry_after else ""
+                self._failure_reason = f"Слишком много запросов (rate limit).{extra}"
+                logger.warning(self._failure_reason)
+                return None
+
+            response.raise_for_status()
+            data = response.json()
+
+            text = ""
+            if "choices" in data and data["choices"]:
+                text = (data["choices"][0].get("message", {}).get("content") or "").strip()
+
+            if text:
+                logger.info("Cloud API: совет получен, %d символов", len(text))
+                self._failure_reason = ""
+                return text
+            self._failure_reason = "Пустой ответ от API"
+            return None
+
+        except httpx.TimeoutException:
+            self._failure_reason = f"Таймаут запроса ({LLM_TIMEOUT} сек)"
+            logger.warning(self._failure_reason)
+            return None
+        except httpx.HTTPStatusError as e:
+            err_text = e.response.text[:300] if e.response else str(e)
+            self._failure_reason = f"HTTP {e.response.status_code}: {err_text}"
+            logger.exception("HTTP ошибка: %s", e)
+            return None
+        except Exception as e:
+            self._failure_reason = str(e)
+            logger.exception("Ошибка Cloud API: %s", e)
+            return None
 
 
-# Синглтон для использования из financial_agent и main
-_agent: LlamaAgent | None = None
+# Синглтон для main и financial_agent
+_agent: CloudAgent | None = None
 
 
-def get_agent(model_path: str | Path | None = None) -> LlamaAgent:
-    """Возвращает глобальный LlamaAgent (ленивая инициализация)."""
+def get_agent(model_path: str | None = None) -> CloudAgent:
+    """Возвращает глобальный CloudAgent (ленивая инициализация). Параметр model_path игнорируется для совместимости."""
     global _agent
     if _agent is None:
-        _agent = LlamaAgent(model_path=model_path)
+        _agent = CloudAgent()
     return _agent

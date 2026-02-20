@@ -2,9 +2,15 @@
 Bank Statement Analyzer MVP — главное окно PyQt5.
 Вкладки: Транзакции (таблица с редактированием категории), Графики (круговая и столбчатая).
 """
+import logging
 import sqlite3
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+
+from env_loader import load_env
+from logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import (
     QApplication,
@@ -44,19 +50,26 @@ class LLMWorker(QObject):
         self.metrics = None
 
     def do_work(self):
+        logger.info("LLM worker: запуск")
         if self.metrics is None:
+            logger.warning("LLM worker: нет метрик")
             self.finished.emit((None, "Недостаточно данных для анализа."))
             return
         try:
             from llm_agent import get_agent, get_setup_instructions
+            logger.debug("LLM worker: получение агента")
             agent = get_agent()
+            logger.info("LLM worker: вызов generate_advice (загрузка модели и генерация могут занять 10-60 сек)")
             result = agent.generate_advice(self.metrics)
             if result:
+                logger.info("LLM worker: совет получен, длина=%d", len(result))
                 self.finished.emit((result, None))
             else:
                 hint = agent.get_failure_reason() or get_setup_instructions()
+                logger.warning("LLM worker: совет не получен: %s", hint[:100])
                 self.finished.emit((None, hint))
-        except Exception:
+        except Exception as e:
+            logger.exception("LLM worker: исключение %s", e)
             from llm_agent import get_setup_instructions
             self.finished.emit((None, get_setup_instructions()))
 
@@ -248,7 +261,9 @@ class MainWindow(QMainWindow):
             self.llm_advice_label.setText(text)
             self.llm_advice_label.setStyleSheet("font-size: 11px;")
         else:
-            self.llm_advice_label.setText(hint or "Модель не загружена или недостаточно данных.")
+            from logging_config import get_log_path
+            msg = hint or "Модель не загружена или недостаточно данных."
+            self.llm_advice_label.setText(f"{msg}\n\nЛог: {get_log_path()}")
             self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
 
     def _on_remove_duplicates(self):
@@ -309,6 +324,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    load_env()
+    setup_logging()
+    logger.info("Finance AI запуск")
     app = QApplication([])
     conn = db.get_connection()
     db.init_db(conn)

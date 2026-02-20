@@ -1,4 +1,3 @@
-# Опционально: для блока «Сгенерировано ИИ» (локальная Llama).
-# Установка: pip install -r requirements-llm.txt
-# Модель GGUF положить в %USERPROFILE%\.bank_analyzer\models\
-llama-cpp-python>=0.2.0
+# Cloud LLM (OpenRouter/OpenAI). Dependencies are in main requirements.txt
+# Install: pip install -r requirements.txt (includes httpx, python-dotenv)
+# Configure: copy .env.example to .env.local, set LLM_API_KEY

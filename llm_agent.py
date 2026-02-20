@@ -1,9 +1,10 @@
 """
 Локальный LLM-агент для финансовых советов (Llama-3.1-8B-Instruct, GGUF).
-Работает оффлайн через llama-cpp-python. Graceful degradation при недоступности модели.
+Работает оффлайн через llama-cpp-python. Fallback на OpenAI API при OPENAI_API_KEY.
 """
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,35 @@ USER_PROMPT_TEMPLATE = """Ниже — агрегированные метрик
 Дай один конкретный совет по управлению финансами. Только текст совета, без преамбулы."""
 
 
+def _generate_via_openai(metrics: dict[str, Any]) -> str | None:
+    """Fallback на OpenAI API при наличии OPENAI_API_KEY. Возвращает совет или None."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
+        user_content = USER_PROMPT_TEMPLATE.format(json_metrics=json_metrics)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=150,
+            temperature=0.3,
+        )
+        text = (response.choices or [{}])[0].message.content
+        return text.strip() if text else None
+    except ImportError:
+        logger.warning("openai не установлен; pip install openai")
+        return None
+    except Exception as e:
+        logger.exception("Ошибка OpenAI API: %s", e)
+        return None
+
+
 def _build_prompt(metrics: dict[str, Any]) -> str:
     """Собирает промпт для Llama 3.1 Instruct (chat-формат)."""
     json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
@@ -47,6 +77,17 @@ def _build_prompt(metrics: dict[str, Any]) -> str:
     return prompt
 
 
+def get_setup_instructions() -> str:
+    """Инструкция по установке локальной модели для показа пользователю."""
+    return (
+        "Локальная модель не загружена.\n\n"
+        "1. pip install -r requirements-llm.txt\n"
+        f"2. Скачайте GGUF-модель (llama-3.1-8b-instruct) и поместите в:\n   {MODELS_DIR}\n"
+        f"3. Имя файла: {DEFAULT_MODEL_NAME}\n\n"
+        "Либо: pip install openai и задайте OPENAI_API_KEY для облачного совета."
+    )
+
+
 class LlamaAgent:
     """
     Обёртка над llama-cpp-python для генерации финансовых советов.
@@ -59,6 +100,7 @@ class LlamaAgent:
         self.model_path = Path(model_path)
         self._llama: Any = None
         self._load_attempted = False
+        self._failure_reason: str = ""
 
     def ensure_loaded(self) -> bool:
         """
@@ -70,9 +112,11 @@ class LlamaAgent:
             return False
         self._load_attempted = True
         if not _LLAMA_AVAILABLE:
+            self._failure_reason = "llama-cpp-python не установлен"
             logger.warning("llama-cpp-python не установлен; ИИ-совет недоступен.")
             return False
         if not self.model_path.is_file():
+            self._failure_reason = f"Модель не найдена: {self.model_path}"
             logger.warning("Модель не найдена: %s", self.model_path)
             return False
         try:
@@ -84,29 +128,36 @@ class LlamaAgent:
             )
             return True
         except Exception as e:
+            self._failure_reason = str(e)
             logger.exception("Ошибка загрузки модели: %s", e)
             return False
 
+    def get_failure_reason(self) -> str:
+        """Причина, по которой модель недоступна (после неудачного ensure_loaded)."""
+        return self._failure_reason or "Неизвестная ошибка"
+
     def generate_advice(self, metrics: dict[str, Any]) -> str | None:
         """
-        Строит промпт из метрик, вызывает модель, возвращает текст совета или None.
+        Строит промпт из метрик, вызывает модель (локальная Llama или OpenAI), возвращает текст совета или None.
         """
-        if not self.ensure_loaded():
-            return None
-        prompt = _build_prompt(metrics)
-        try:
-            out = self._llama(
-                prompt,
-                max_tokens=150,
-                temperature=0.3,
-                stop=["<|eot_id|>", "\n\n"],
-                echo=False,
-            )
-            text = (out.get("choices") or [{}])[0].get("text", "").strip()
-            return text if text else None
-        except Exception as e:
-            logger.exception("Ошибка генерации совета: %s", e)
-            return None
+        if self.ensure_loaded():
+            prompt = _build_prompt(metrics)
+            try:
+                out = self._llama(
+                    prompt,
+                    max_tokens=150,
+                    temperature=0.3,
+                    stop=["<|eot_id|>", "\n\n"],
+                    echo=False,
+                )
+                text = (out.get("choices") or [{}])[0].get("text", "").strip()
+                return text if text else None
+            except Exception as e:
+                logger.exception("Ошибка генерации совета: %s", e)
+                return None
+
+        # Fallback на OpenAI API
+        return _generate_via_openai(metrics)
 
 
 # Синглтон для использования из financial_agent и main

@@ -37,7 +37,7 @@ CATEGORIES = ["Продукты", "Транспорт", "Развлечения"
 
 class LLMWorker(QObject):
     """Воркер для вызова LLM в фоне (не блокирует UI)."""
-    finished = pyqtSignal(object)  # str | None
+    finished = pyqtSignal(object)  # tuple[str|None, str|None]: (совет, подсказка_при_ошибке)
 
     def __init__(self):
         super().__init__()
@@ -45,14 +45,20 @@ class LLMWorker(QObject):
 
     def do_work(self):
         if self.metrics is None:
-            self.finished.emit(None)
+            self.finished.emit((None, "Недостаточно данных для анализа."))
             return
         try:
-            from llm_agent import get_agent
-            result = get_agent().generate_advice(self.metrics)
-            self.finished.emit(result)
+            from llm_agent import get_agent, get_setup_instructions
+            agent = get_agent()
+            result = agent.generate_advice(self.metrics)
+            if result:
+                self.finished.emit((result, None))
+            else:
+                hint = agent.get_failure_reason() or get_setup_instructions()
+                self.finished.emit((None, hint))
         except Exception:
-            self.finished.emit(None)
+            from llm_agent import get_setup_instructions
+            self.finished.emit((None, get_setup_instructions()))
 
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -232,16 +238,17 @@ class MainWindow(QMainWindow):
         self._llm_worker.metrics = financial_agent.build_llm_metrics(self._conn)
         self._llm_thread.start()
 
-    def _on_llm_finished(self, text):
+    def _on_llm_finished(self, payload):
         """Обновление блока ИИ после завершения потока (вызывается в main thread по сигналу)."""
         self._llm_thread.quit()
         self._llm_thread.wait()
         self.llm_request_btn.setEnabled(True)
+        text, hint = payload if isinstance(payload, tuple) else (payload, None)
         if text:
             self.llm_advice_label.setText(text)
             self.llm_advice_label.setStyleSheet("font-size: 11px;")
         else:
-            self.llm_advice_label.setText("Модель не загружена или недостаточно данных.")
+            self.llm_advice_label.setText(hint or "Модель не загружена или недостаточно данных.")
             self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
 
     def _on_remove_duplicates(self):

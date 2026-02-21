@@ -29,6 +29,19 @@ USER_PROMPT_TEMPLATE = """Ниже — агрегированные метрик
 
 Дай один конкретный совет по управлению финансами. Только текст совета, без преамбулы."""
 
+GOAL_SYSTEM_PROMPT = """Ты — мой финансовый консультант. Строгие правила: не упоминай конкретные бренды; не давай советов по инвестициям или кредитам; не придумывай данные — используй только те, что в метриках; пиши на русском; ответ должен быть ёмким."""
+
+GOAL_USER_PROMPT_TEMPLATE = """Помоги достичь {target_amount} ₽ к {target_date}. Проанализируй мои траты.
+
+КРИТИЧЕСКИ ВАЖНО: В ответе ОБЯЗАТЕЛЬНО включи фразу: «Для достижения цели к {target_date} необходимо откладывать {monthly_savings_rub} ₽ в месяц.» — используй ТОЧНО target_date и monthly_savings_rub из метрик (не вычисляй сумму сам).
+
+Дату покажи в формате ДД.ММ.ГГГГ (например 11.03.2027).
+
+Дополнительно: рекомендации, как сократить расходы. Ответ ёмкий. Не упоминай данные, которых нет.
+
+Метрики (анонимизированные):
+{json_metrics}"""
+
 
 def get_setup_instructions() -> str:
     """Инструкция по настройке Cloud API для показа пользователю."""
@@ -142,9 +155,91 @@ class CloudAgent:
             self._failure_reason = f"HTTP {e.response.status_code}: {err_text}"
             logger.exception("HTTP ошибка: %s", e)
             return None
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            self._failure_reason = f"Нет подключения к интернету: {e}"
+            logger.warning(self._failure_reason)
+            return None
         except Exception as e:
             self._failure_reason = str(e)
             logger.exception("Ошибка Cloud API: %s", e)
+            return None
+
+    def generate_goal_advice(self, metrics: dict[str, Any]) -> str | None:
+        """
+        Генерация рекомендаций по финансовой цели. Строгий промпт: без брендов, инвестиций, галлюцинаций.
+        При сетевой ошибке возвращает None (caller использует rule-based).
+        """
+        api_key = (LLM_API_KEY or "").strip()
+        if not api_key:
+            self._failure_reason = "API-ключ не найден. Задайте LLM_API_KEY или OPENROUTER_API_KEY в .env"
+            logger.warning(self._failure_reason)
+            return None
+
+        json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
+        target_date = metrics.get("target_date", "")
+        target_date_display = target_date  # DD.MM.YYYY при необходимости
+        if len(target_date) >= 10 and target_date[4] == "-":
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(target_date[:10], "%Y-%m-%d")
+                target_date_display = dt.strftime("%d.%m.%Y")
+            except ValueError:
+                pass
+        user_content = GOAL_USER_PROMPT_TEMPLATE.format(
+            target_amount=int(metrics.get("target_amount", 0)),
+            target_date=target_date_display,
+            monthly_savings_rub=int(metrics.get("monthly_savings_rub", 0)),
+            json_metrics=json_metrics,
+        )
+
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": GOAL_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 300,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            logger.debug("Отправка goal-запроса к %s", LLM_API_URL)
+            with httpx.Client(timeout=LLM_TIMEOUT) as client:
+                response = client.post(LLM_API_URL, headers=headers, json=payload)
+
+            if response.status_code == 402:
+                self._failure_reason = "Недостаточно кредитов"
+                return None
+            if response.status_code == 404:
+                self._failure_reason = f"Модель не найдена: {LLM_MODEL}"
+                return None
+            if response.status_code in (400, 429):
+                self._failure_reason = f"HTTP {response.status_code}"
+                return None
+
+            response.raise_for_status()
+            data = response.json()
+            text = ""
+            if "choices" in data and data["choices"]:
+                text = (data["choices"][0].get("message", {}).get("content") or "").strip()
+            if text:
+                logger.info("Cloud API: goal-совет получен, %d символов", len(text))
+                self._failure_reason = ""
+                return text
+            self._failure_reason = "Пустой ответ от API"
+            return None
+
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            self._failure_reason = "Нет подключения к интернету"
+            logger.warning(self._failure_reason)
+            return None
+        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
+            self._failure_reason = str(e)
+            logger.exception("Ошибка goal API: %s", e)
             return None
 
 

@@ -1,9 +1,9 @@
 """
 AI-агент финансового состояния (rule-based + опционально LLM).
 Собирает агрегаты из БД, прогоняет правила, возвращает 1–3 рекомендации.
-Поддержка локальной Llama для дополнительного совета (graceful degradation).
 """
 import sqlite3
+from datetime import date, datetime
 from typing import Any
 
 import database as db
@@ -37,6 +37,59 @@ def build_llm_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
         "top_categories": [{"name": c, "amount_rub": round(a, 2)} for c, a in top_cats],
     }
     return metrics
+
+
+def build_goal_metrics(
+    conn: sqlite3.Connection,
+    target_amount: float,
+    target_date: str,
+) -> dict[str, Any]:
+    """
+    Анонимизированные метрики для финансовой цели (за 90 дней).
+    Без описаний, номеров карт, имён.
+    """
+    income_90d = db.get_income_last_90_days(conn)
+    expenses_90d = db.get_total_expenses_last_90_days(conn)
+    top_cats = db.get_expenses_by_category_last_90_days(conn)[:10]
+    monthly_income = round(income_90d / 3, 2) if income_90d else 0.0
+    monthly_expenses = round(expenses_90d / 3, 2) if expenses_90d else 0.0
+    current_savings = max(0.0, round(income_90d - expenses_90d, 2))
+    return {
+        "target_amount": round(float(target_amount), 2),
+        "target_date": target_date,
+        "monthly_income": monthly_income,
+        "monthly_expenses": monthly_expenses,
+        "top_categories": [c for c, _ in top_cats],
+        "current_savings": current_savings,
+    }
+
+
+def calc_goal_monthly_savings(
+    target_amount: float,
+    target_date: str,
+    current_savings: float,
+) -> tuple[float, str]:
+    """
+    Rule-based расчёт: сколько откладывать в месяц до даты.
+    Возвращает (руб/мес, текст подсказки).
+    """
+    try:
+        if isinstance(target_date, str):
+            end = datetime.strptime(target_date[:10], "%Y-%m-%d").date()
+        else:
+            end = target_date
+    except (ValueError, TypeError):
+        return 0.0, "Неверный формат даты. Используйте ГГГГ-ММ-ДД."
+
+    today = date.today()
+    if end <= today:
+        return 0.0, "Дата окончания должна быть в будущем."
+
+    months = max(1, (end.year - today.year) * 12 + (end.month - today.month))
+    remaining = max(0.0, float(target_amount) - float(current_savings))
+    monthly = round(remaining / months, 2) if months else 0.0
+    date_str = end.strftime("%d.%m.%Y")
+    return monthly, f"Ежемесячно нужно откладывать {int(monthly)} ₽ до {date_str}. Данных для детального анализа недостаточно."
 
 
 def get_llm_recommendation(conn: sqlite3.Connection) -> str | None:

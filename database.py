@@ -173,6 +173,45 @@ def get_total_expenses_last_30_days(conn: sqlite3.Connection) -> float:
     return float(cur.fetchone()[0] or 0)
 
 
+def get_income_last_90_days(conn: sqlite3.Connection) -> float:
+    """Сумма доходов (amount > 0) за последние 90 дней."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount), 0) FROM transactions
+        WHERE amount > 0 AND date >= date('now', '-90 days')
+        """
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
+def get_total_expenses_last_90_days(conn: sqlite3.Connection) -> float:
+    """Сумма расходов (amount < 0, по модулю) за последние 90 дней."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+        WHERE amount < 0 AND date >= date('now', '-90 days')
+        """
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
+def get_expenses_by_category_last_90_days(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, float]]:
+    """Агрегат по категориям за последние 90 дней, только расходы (amount < 0). Сумма по модулю."""
+    cur = conn.execute(
+        """
+        SELECT category, ABS(SUM(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+          AND date >= date('now', '-90 days')
+        GROUP BY category
+        ORDER BY total DESC
+        """
+    )
+    return [(row[0], row[1]) for row in cur.fetchall()]
+
+
 def get_expense_sum_by_category_group(
     conn: sqlite3.Connection,
     days: int,

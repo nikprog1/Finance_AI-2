@@ -5,7 +5,7 @@ Bank Statement Analyzer MVP — главное окно PyQt5.
 import logging
 import sqlite3
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal, QObject
 
 from env_loader import load_env
 from logging_config import setup_logging
@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QDateEdit,
+    QDoubleSpinBox,
     QMainWindow,
     QTabWidget,
     QWidget,
@@ -41,37 +44,31 @@ import financial_agent
 CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории"]
 
 
-class LLMWorker(QObject):
-    """Воркер для вызова LLM в фоне (не блокирует UI)."""
-    finished = pyqtSignal(object)  # tuple[str|None, str|None]: (совет, подсказка_при_ошибке)
+class GoalWorker(QObject):
+    """Воркер для вызова облачного ИИ (выполняется в фоне, БД не трогаем)."""
+    finished = pyqtSignal(object)  # tuple[str, bool]: (текст, from_ai)
 
     def __init__(self):
         super().__init__()
         self.metrics = None
+        self.rule_text = ""
+        self.consent = False
 
     def do_work(self):
-        logger.info("LLM worker: запуск")
-        if self.metrics is None:
-            logger.warning("LLM worker: нет метрик")
-            self.finished.emit((None, "Недостаточно данных для анализа."))
+        if not self.consent:
+            self.finished.emit((self.rule_text, False))
             return
         try:
-            from llm_agent import get_agent, get_setup_instructions
-            logger.debug("LLM worker: получение агента")
+            from llm_agent import get_agent
             agent = get_agent()
-            logger.info("LLM worker: вызов generate_advice (загрузка модели и генерация могут занять 10-60 сек)")
-            result = agent.generate_advice(self.metrics)
+            result = agent.generate_goal_advice(self.metrics)
             if result:
-                logger.info("LLM worker: совет получен, длина=%d", len(result))
-                self.finished.emit((result, None))
+                self.finished.emit((result, True))
             else:
-                hint = agent.get_failure_reason() or get_setup_instructions()
-                logger.warning("LLM worker: совет не получен: %s", hint[:100])
-                self.finished.emit((None, hint))
+                self.finished.emit((self.rule_text, False))
         except Exception as e:
-            logger.exception("LLM worker: исключение %s", e)
-            from llm_agent import get_setup_instructions
-            self.finished.emit((None, get_setup_instructions()))
+            logger.exception("Goal worker: %s", e)
+            self.finished.emit((self.rule_text, False))
 
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -155,28 +152,53 @@ class MainWindow(QMainWindow):
         self.recommendations_scroll.setWidget(self.recommendations_content)
         self.recommendations_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         rec_layout.addWidget(self.recommendations_scroll, 1)
-        # Блок «Сгенерировано ИИ» и кнопка запроса
-        self.llm_section = QFrame()
-        llm_layout = QVBoxLayout(self.llm_section)
-        llm_title = QLabel("Сгенерировано ИИ")
-        llm_title.setFont(QFont(llm_title.font().family(), 9, QFont.Bold))
-        llm_layout.addWidget(llm_title)
-        self.llm_advice_label = QLabel("Нажмите «Запросить совет ИИ» для генерации.")
-        self.llm_advice_label.setWordWrap(True)
-        self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
-        llm_layout.addWidget(self.llm_advice_label)
-        self.llm_request_btn = QPushButton("Запросить совет ИИ")
-        self.llm_request_btn.clicked.connect(self._on_request_llm_advice)
-        llm_layout.addWidget(self.llm_request_btn)
-        rec_layout.addWidget(self.llm_section)
+        # Блок «Финансовая цель»
+        self.goal_section = QFrame()
+        goal_layout = QVBoxLayout(self.goal_section)
+        goal_title = QLabel("Финансовая цель")
+        goal_title.setFont(QFont(goal_title.font().family(), 9, QFont.Bold))
+        goal_layout.addWidget(goal_title)
+        goal_amount_label = QLabel("Целевая сумма (₽)")
+        goal_layout.addWidget(goal_amount_label)
+        self.goal_amount_spin = QDoubleSpinBox()
+        self.goal_amount_spin.setMinimum(0)
+        self.goal_amount_spin.setMaximum(1e9)
+        self.goal_amount_spin.setSingleStep(1000)
+        self.goal_amount_spin.setValue(100000)
+        goal_layout.addWidget(self.goal_amount_spin)
+        goal_date_label = QLabel("Дата окончания")
+        goal_layout.addWidget(goal_date_label)
+        self.goal_date_edit = QDateEdit()
+        self.goal_date_edit.setCalendarPopup(True)
+        min_date = QDate.currentDate().addMonths(1)
+        self.goal_date_edit.setMinimumDate(min_date)
+        self.goal_date_edit.setDate(min_date)
+        goal_layout.addWidget(self.goal_date_edit)
+        self.goal_consent_check = QCheckBox("Разрешить анализ через защищённый облачный ИИ")
+        goal_layout.addWidget(self.goal_consent_check)
+        self.goal_request_btn = QPushButton("Получить рекомендации")
+        self.goal_request_btn.clicked.connect(self._on_goal_request)
+        goal_layout.addWidget(self.goal_request_btn)
+        self.goal_result_frame = QFrame()
+        goal_result_layout = QVBoxLayout(self.goal_result_frame)
+        self.goal_result_subtitle = QLabel("")
+        self.goal_result_subtitle.setFont(QFont(self.goal_result_subtitle.font().family(), 8))
+        goal_result_layout.addWidget(self.goal_result_subtitle)
+        self.goal_result_label = QLabel("")
+        self.goal_result_label.setWordWrap(True)
+        self.goal_result_label.setStyleSheet("font-size: 11px;")
+        goal_result_layout.addWidget(self.goal_result_label)
+        self.goal_result_frame.setVisible(False)
+        goal_layout.addWidget(self.goal_result_frame)
+        rec_layout.addWidget(self.goal_section)
         table_and_panel.addWidget(self.recommendations_panel)
 
-        # Поток для вызова LLM
-        self._llm_thread = QThread()
-        self._llm_worker = LLMWorker()
-        self._llm_worker.moveToThread(self._llm_thread)
-        self._llm_thread.started.connect(self._llm_worker.do_work)
-        self._llm_worker.finished.connect(self._on_llm_finished)
+        # Поток для вызова облачного ИИ по цели
+        self._goal_thread = QThread()
+        self._goal_worker = GoalWorker()
+        self._goal_worker.moveToThread(self._goal_thread)
+        self._goal_thread.started.connect(self._goal_worker.do_work)
+        self._goal_worker.finished.connect(self._on_goal_finished)
 
         self.tabs.addTab(self.table_tab, "Транзакции")
 
@@ -188,6 +210,8 @@ class MainWindow(QMainWindow):
         self.charts_layout.addWidget(self.chart_canvas)
         self.tabs.addTab(self.charts_tab, "Графики")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        self._last_goal_result = None  # (text, from_ai) для отображения в «Финансовые советы»
 
         # При запуске удаляем дубликаты (дата + описание + сумма), затем загружаем таблицу и рекомендации
         db.remove_duplicates(self._conn)
@@ -219,19 +243,30 @@ class MainWindow(QMainWindow):
         self._refresh_recommendations()
 
     def _refresh_recommendations(self):
-        """Обновить панель рекомендаций AI-агента."""
-        # Очистить текущее содержимое
+        """Обновить панель рекомендаций (цель + rule-based)."""
         while self.recommendations_content_layout.count():
             child = self.recommendations_content_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+        # Сначала блок рекомендаций по цели (если есть)
+        if self._last_goal_result:
+            text, from_ai = self._last_goal_result
+            goal_title = QLabel("Сгенерировано ИИ" if from_ai else "Расчёт без облачного ИИ")
+            goal_title.setFont(QFont(goal_title.font().family(), 9, QFont.Bold))
+            goal_title.setStyleSheet("color: gray;" if not from_ai else "")
+            self.recommendations_content_layout.addWidget(goal_title)
+            goal_text = QLabel(text)
+            goal_text.setWordWrap(True)
+            goal_text.setStyleSheet("font-size: 11px;")
+            self.recommendations_content_layout.addWidget(goal_text)
+            self.recommendations_content_layout.addSpacing(16)
         recs = financial_agent.get_recommendations(self._conn)
-        if not recs:
+        if not recs and not self._last_goal_result:
             hint = QLabel("Недостаточно данных для анализа.\nЗагрузите CSV с транзакциями.")
             hint.setWordWrap(True)
             hint.setStyleSheet("color: gray;")
             self.recommendations_content_layout.addWidget(hint)
-        else:
+        elif recs:
             for rec in recs:
                 text_label = QLabel(rec.text)
                 text_label.setWordWrap(True)
@@ -242,29 +277,45 @@ class MainWindow(QMainWindow):
                 why_label.setStyleSheet("color: gray; font-size: 11px;")
                 self.recommendations_content_layout.addWidget(why_label)
                 self.recommendations_content_layout.addSpacing(12)
-        # Блок «Сгенерировано ИИ» не очищается — он ниже scroll и обновляется по кнопке
 
-    def _on_request_llm_advice(self):
-        """Запуск генерации совета ИИ в фоновом потоке."""
-        self.llm_request_btn.setEnabled(False)
-        self.llm_advice_label.setText("Генерация…")
-        self._llm_worker.metrics = financial_agent.build_llm_metrics(self._conn)
-        self._llm_thread.start()
+    def _on_goal_request(self):
+        """Запрос рекомендаций по финансовой цели (в главном потоке — БД, в фоне — только ИИ)."""
+        target_amount = self.goal_amount_spin.value()
+        target_date = self.goal_date_edit.date()
+        today = QDate.currentDate()
+        min_date = today.addMonths(1)
+        if target_amount < 0:
+            self.statusBar().showMessage("Целевая сумма должна быть >= 0")
+            return
+        if target_date < min_date:
+            self.statusBar().showMessage("Дата окончания должна быть не раньше чем через месяц")
+            return
+        # ISO-формат даты (yyyy-MM-dd) для API и расчётов
+        target_date_str = f"{target_date.year():04d}-{target_date.month():02d}-{target_date.day():02d}"
+        # Сбор метрик и rule-based расчёт в главном потоке (БД)
+        from financial_agent import build_goal_metrics, calc_goal_monthly_savings
+        metrics = build_goal_metrics(self._conn, target_amount, target_date_str)
+        current_savings = metrics.get("current_savings", 0.0)
+        monthly_rub, rule_text = calc_goal_monthly_savings(target_amount, target_date_str, current_savings)
+        metrics["monthly_savings_rub"] = monthly_rub  # готовая сумма для ИИ
+        self.goal_request_btn.setEnabled(False)
+        self.goal_result_frame.setVisible(False)
+        self._goal_worker.metrics = metrics
+        self._goal_worker.rule_text = rule_text
+        self._goal_worker.consent = self.goal_consent_check.isChecked()
+        self._goal_thread.start()
 
-    def _on_llm_finished(self, payload):
-        """Обновление блока ИИ после завершения потока (вызывается в main thread по сигналу)."""
-        self._llm_thread.quit()
-        self._llm_thread.wait()
-        self.llm_request_btn.setEnabled(True)
-        text, hint = payload if isinstance(payload, tuple) else (payload, None)
-        if text:
-            self.llm_advice_label.setText(text)
-            self.llm_advice_label.setStyleSheet("font-size: 11px;")
-        else:
-            from logging_config import get_log_path
-            msg = hint or "Модель не загружена или недостаточно данных."
-            self.llm_advice_label.setText(f"{msg}\n\nЛог: {get_log_path()}")
-            self.llm_advice_label.setStyleSheet("color: gray; font-size: 11px;")
+    def _on_goal_finished(self, payload):
+        """Показать результат в окне «Финансовые советы»."""
+        self._goal_thread.quit()
+        self._goal_thread.wait()
+        self.goal_request_btn.setEnabled(True)
+        try:
+            text, from_ai = payload
+        except (TypeError, ValueError):
+            text, from_ai = str(payload), False
+        self._last_goal_result = (text or "", from_ai)
+        self._refresh_recommendations()
 
     def _on_remove_duplicates(self):
         """Удалить дубликаты транзакций (по дате, описанию, сумме, номеру карты), обновить таблицу и рекомендации."""

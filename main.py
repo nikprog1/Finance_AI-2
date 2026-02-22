@@ -46,6 +46,7 @@ from matplotlib.figure import Figure
 import database as db
 import csv_import
 import financial_agent
+from models_dialog import ModelsManagementWidget
 
 CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории"]
 
@@ -288,8 +289,7 @@ class MainWindow(QMainWindow):
         settings_title = QLabel("Настройки программы")
         settings_title.setFont(QFont(settings_title.font().family(), 12, QFont.Bold))
         settings_layout.addWidget(settings_title)
-        models_widget = __import__("models_dialog", fromlist=["ModelsManagementWidget"]).ModelsManagementWidget
-        self.models_widget = models_widget(conn)
+        self.models_widget = ModelsManagementWidget(conn)
         settings_layout.addWidget(self.models_widget)
         settings_sep = QLabel("─" * 60)
         settings_layout.addWidget(settings_sep)

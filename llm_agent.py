@@ -31,16 +31,11 @@ USER_PROMPT_TEMPLATE = """Ниже — агрегированные метрик
 
 GOAL_SYSTEM_PROMPT = """Ты — мой финансовый консультант. Строгие правила: не упоминай конкретные бренды; не давай советов по инвестициям или кредитам; не придумывай данные — используй только те, что в метриках; пиши на русском; ответ должен быть ёмким."""
 
-GOAL_USER_PROMPT_TEMPLATE = """Помоги достичь {target_amount} ₽ к {target_date}. Проанализируй мои траты.
+EXPENSE_ADVICE_USER_PROMPT = """Ниже — агрегированные метрики пользователя (без личных данных):
 
-КРИТИЧЕСКИ ВАЖНО: В ответе ОБЯЗАТЕЛЬНО включи фразу: «Для достижения цели к {target_date} необходимо откладывать {monthly_savings_rub} ₽ в месяц.» — используй ТОЧНО target_date и monthly_savings_rub из метрик (не вычисляй сумму сам).
+{json_metrics}
 
-Дату покажи в формате ДД.ММ.ГГГГ (например 11.03.2027).
-
-Дополнительно: рекомендации, как сократить расходы. Ответ ёмкий. Не упоминай данные, которых нет.
-
-Метрики (анонимизированные):
-{json_metrics}"""
+В ответе ОБЯЗАТЕЛЬНО включи фразу: как сократить расходы. Ответ ёмкий. Не упоминай данные, которых нет."""
 
 
 def get_setup_instructions() -> str:
@@ -164,36 +159,34 @@ class CloudAgent:
             logger.exception("Ошибка Cloud API: %s", e)
             return None
 
-    def generate_goal_advice(self, metrics: dict[str, Any]) -> str | None:
+    def generate_expense_advice(
+        self, metrics: dict[str, Any], api_config: dict[str, Any] | None = None
+    ) -> str | None:
         """
-        Генерация рекомендаций по финансовой цели. Строгий промпт: без брендов, инвестиций, галлюцинаций.
+        Генерация рекомендаций «как сократить расходы». Строгий промпт: без брендов, инвестиций.
+        api_config: опционально из БД — api_url, api_key, model, timeout. Иначе — из .env.
         При сетевой ошибке возвращает None (caller использует rule-based).
         """
-        api_key = (LLM_API_KEY or "").strip()
+        if api_config:
+            api_key = (api_config.get("api_key") or "").strip()
+            api_url = api_config.get("api_url") or LLM_API_URL
+            model = api_config.get("model") or LLM_MODEL
+            timeout = int(api_config.get("timeout") or LLM_TIMEOUT)
+        else:
+            api_key = (LLM_API_KEY or os.environ.get("OPENROUTER_API_KEY", "") or "").strip()
+            api_url = LLM_API_URL
+            model = LLM_MODEL
+            timeout = LLM_TIMEOUT
         if not api_key:
-            self._failure_reason = "API-ключ не найден. Задайте LLM_API_KEY или OPENROUTER_API_KEY в .env"
+            self._failure_reason = "API-ключ не найден. Добавьте модель в Настройках или задайте LLM_API_KEY в .env"
             logger.warning(self._failure_reason)
             return None
 
         json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
-        target_date = metrics.get("target_date", "")
-        target_date_display = target_date  # DD.MM.YYYY при необходимости
-        if len(target_date) >= 10 and target_date[4] == "-":
-            try:
-                from datetime import datetime
-                dt = datetime.strptime(target_date[:10], "%Y-%m-%d")
-                target_date_display = dt.strftime("%d.%m.%Y")
-            except ValueError:
-                pass
-        user_content = GOAL_USER_PROMPT_TEMPLATE.format(
-            target_amount=int(metrics.get("target_amount", 0)),
-            target_date=target_date_display,
-            monthly_savings_rub=int(metrics.get("monthly_savings_rub", 0)),
-            json_metrics=json_metrics,
-        )
+        user_content = EXPENSE_ADVICE_USER_PROMPT.format(json_metrics=json_metrics)
 
         payload = {
-            "model": LLM_MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": GOAL_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
@@ -207,15 +200,15 @@ class CloudAgent:
         }
 
         try:
-            logger.debug("Отправка goal-запроса к %s", LLM_API_URL)
-            with httpx.Client(timeout=LLM_TIMEOUT) as client:
-                response = client.post(LLM_API_URL, headers=headers, json=payload)
+            logger.debug("Отправка expense-advice запроса к %s", api_url)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(api_url, headers=headers, json=payload)
 
             if response.status_code == 402:
                 self._failure_reason = "Недостаточно кредитов"
                 return None
             if response.status_code == 404:
-                self._failure_reason = f"Модель не найдена: {LLM_MODEL}"
+                self._failure_reason = f"Модель не найдена: {model}"
                 return None
             if response.status_code in (400, 429):
                 self._failure_reason = f"HTTP {response.status_code}"
@@ -227,7 +220,7 @@ class CloudAgent:
             if "choices" in data and data["choices"]:
                 text = (data["choices"][0].get("message", {}).get("content") or "").strip()
             if text:
-                logger.info("Cloud API: goal-совет получен, %d символов", len(text))
+                logger.info("Cloud API: совет получен, %d символов", len(text))
                 self._failure_reason = ""
                 return text
             self._failure_reason = "Пустой ответ от API"
@@ -239,7 +232,7 @@ class CloudAgent:
             return None
         except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
             self._failure_reason = str(e)
-            logger.exception("Ошибка goal API: %s", e)
+            logger.exception("Ошибка expense-advice API: %s", e)
             return None
 
 

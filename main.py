@@ -32,6 +32,12 @@ from PyQt5.QtWidgets import (
     QLabel,
     QFrame,
     QPushButton,
+    QLineEdit,
+    QMessageBox,
+    QHeaderView,
+    QTableWidget,
+    QTableWidgetItem,
+    QProgressBar,
 )
 from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -53,6 +59,7 @@ class GoalWorker(QObject):
         self.metrics = None
         self.rule_text = ""
         self.consent = False
+        self.api_config = None  # опционально: url, key, model, timeout из БД
 
     def do_work(self):
         if not self.consent:
@@ -61,7 +68,7 @@ class GoalWorker(QObject):
         try:
             from llm_agent import get_agent
             agent = get_agent()
-            result = agent.generate_goal_advice(self.metrics)
+            result = agent.generate_expense_advice(self.metrics, api_config=self.api_config)
             if result:
                 self.finished.emit((result, True))
             else:
@@ -110,8 +117,6 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
         load_act = toolbar.addAction("Загрузить CSV")
         load_act.triggered.connect(self._on_load_csv)
-        dedup_act = toolbar.addAction("Удалить дубликаты")
-        dedup_act.triggered.connect(self._on_remove_duplicates)
         charts_act = toolbar.addAction("Графики")
         charts_act.triggered.connect(self._on_show_charts)
 
@@ -122,9 +127,53 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        # Вкладка «Транзакции» — таблица слева, панель рекомендаций справа
+        # Вкладка «Транзакции» — поиск/фильтры, таблица слева, панель рекомендаций справа
         self.table_tab = QWidget()
-        table_and_panel = QHBoxLayout(self.table_tab)
+        table_main = QVBoxLayout(self.table_tab)
+        # Панель поиска и фильтров
+        filter_row = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Поиск (дата, категория, сумма, описание, карта)")
+        self.search_edit.setMinimumWidth(200)
+        filter_row.addWidget(QLabel("Поиск:"))
+        filter_row.addWidget(self.search_edit)
+        self.date_from_edit = QDateEdit()
+        self.date_from_edit.setCalendarPopup(True)
+        self.date_from_edit.setDate(QDate.currentDate().addYears(-1))
+        filter_row.addWidget(QLabel("С:"))
+        filter_row.addWidget(self.date_from_edit)
+        self.date_to_edit = QDateEdit()
+        self.date_to_edit.setCalendarPopup(True)
+        self.date_to_edit.setDate(QDate.currentDate())
+        filter_row.addWidget(QLabel("По:"))
+        filter_row.addWidget(self.date_to_edit)
+        self.category_filter = QComboBox()
+        self.category_filter.addItem("— Все категории —", None)
+        filter_row.addWidget(QLabel("Категория:"))
+        filter_row.addWidget(self.category_filter)
+        self.card_filter = QComboBox()
+        self.card_filter.addItem("— Все карты —", None)
+        filter_row.addWidget(QLabel("Карта:"))
+        filter_row.addWidget(self.card_filter)
+        self.op_type_filter = QComboBox()
+        self.op_type_filter.addItem("Все", "all")
+        self.op_type_filter.addItem("Доходы", "income")
+        self.op_type_filter.addItem("Расходы", "expense")
+        filter_row.addWidget(QLabel("Тип:"))
+        filter_row.addWidget(self.op_type_filter)
+        search_btn = QPushButton("Поиск")
+        search_btn.clicked.connect(self._on_search)
+        filter_row.addWidget(search_btn)
+        add_btn = QPushButton("Добавить")
+        add_btn.clicked.connect(self._on_add_transaction)
+        filter_row.addWidget(add_btn)
+        del_btn = QPushButton("Удалить")
+        del_btn.clicked.connect(self._on_delete_transaction)
+        filter_row.addWidget(del_btn)
+        filter_row.addStretch()
+        table_main.addLayout(filter_row)
+        table_and_panel = QHBoxLayout()
+        table_main.addLayout(table_and_panel)
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Дата", "Номер карты", "Описание", "Сумма", "Категория"])
         self.table = QTableView()
@@ -152,45 +201,11 @@ class MainWindow(QMainWindow):
         self.recommendations_scroll.setWidget(self.recommendations_content)
         self.recommendations_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         rec_layout.addWidget(self.recommendations_scroll, 1)
-        # Блок «Финансовая цель»
-        self.goal_section = QFrame()
-        goal_layout = QVBoxLayout(self.goal_section)
-        goal_title = QLabel("Финансовая цель")
-        goal_title.setFont(QFont(goal_title.font().family(), 9, QFont.Bold))
-        goal_layout.addWidget(goal_title)
-        goal_amount_label = QLabel("Целевая сумма (₽)")
-        goal_layout.addWidget(goal_amount_label)
-        self.goal_amount_spin = QDoubleSpinBox()
-        self.goal_amount_spin.setMinimum(0)
-        self.goal_amount_spin.setMaximum(1e9)
-        self.goal_amount_spin.setSingleStep(1000)
-        self.goal_amount_spin.setValue(100000)
-        goal_layout.addWidget(self.goal_amount_spin)
-        goal_date_label = QLabel("Дата окончания")
-        goal_layout.addWidget(goal_date_label)
-        self.goal_date_edit = QDateEdit()
-        self.goal_date_edit.setCalendarPopup(True)
-        min_date = QDate.currentDate().addMonths(1)
-        self.goal_date_edit.setMinimumDate(min_date)
-        self.goal_date_edit.setDate(min_date)
-        goal_layout.addWidget(self.goal_date_edit)
-        self.goal_consent_check = QCheckBox("Разрешить анализ через защищённый облачный ИИ")
-        goal_layout.addWidget(self.goal_consent_check)
-        self.goal_request_btn = QPushButton("Получить рекомендации")
-        self.goal_request_btn.clicked.connect(self._on_goal_request)
-        goal_layout.addWidget(self.goal_request_btn)
-        self.goal_result_frame = QFrame()
-        goal_result_layout = QVBoxLayout(self.goal_result_frame)
-        self.goal_result_subtitle = QLabel("")
-        self.goal_result_subtitle.setFont(QFont(self.goal_result_subtitle.font().family(), 8))
-        goal_result_layout.addWidget(self.goal_result_subtitle)
-        self.goal_result_label = QLabel("")
-        self.goal_result_label.setWordWrap(True)
-        self.goal_result_label.setStyleSheet("font-size: 11px;")
-        goal_result_layout.addWidget(self.goal_result_label)
-        self.goal_result_frame.setVisible(False)
-        goal_layout.addWidget(self.goal_result_frame)
-        rec_layout.addWidget(self.goal_section)
+        self.advice_consent_check = QCheckBox("Разрешить анализ через защищённый облачный ИИ")
+        rec_layout.addWidget(self.advice_consent_check)
+        self.advice_request_btn = QPushButton("Получить рекомендации")
+        self.advice_request_btn.clicked.connect(self._on_advice_request)
+        rec_layout.addWidget(self.advice_request_btn)
         table_and_panel.addWidget(self.recommendations_panel)
 
         # Поток для вызова облачного ИИ по цели
@@ -201,6 +216,132 @@ class MainWindow(QMainWindow):
         self._goal_worker.finished.connect(self._on_goal_finished)
 
         self.tabs.addTab(self.table_tab, "Транзакции")
+
+        # Вкладка «Финансовые цели»
+        self.goals_tab = QWidget()
+        goals_layout = QVBoxLayout(self.goals_tab)
+        goals_title = QLabel("Финансовые цели")
+        goals_title.setFont(QFont(goals_title.font().family(), 12, QFont.Bold))
+        goals_layout.addWidget(goals_title)
+        goals_btns = QHBoxLayout()
+        goals_add_btn = QPushButton("Добавить")
+        goals_add_btn.clicked.connect(self._on_add_goal)
+        goals_btns.addWidget(goals_add_btn)
+        goals_edit_btn = QPushButton("Редактировать")
+        goals_edit_btn.clicked.connect(self._on_edit_goal)
+        goals_btns.addWidget(goals_edit_btn)
+        goals_del_btn = QPushButton("Удалить")
+        goals_del_btn.clicked.connect(self._on_delete_goal)
+        goals_btns.addWidget(goals_del_btn)
+        goals_btns.addStretch()
+        goals_layout.addLayout(goals_btns)
+        self.goals_table = QTableWidget()
+        self.goals_table.setColumnCount(7)
+        self.goals_table.setHorizontalHeaderLabels([
+            "Описание", "Целевая сумма", "Начало", "Конец", "Прогресс", "Рег. сумма/мес", "Прогресс %"
+        ])
+        self.goals_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        goals_layout.addWidget(self.goals_table)
+        self.tabs.addTab(self.goals_tab, "Финансовые цели")
+
+        # Вкладка «Общее»
+        self.overview_tab = QWidget()
+        overview_layout = QVBoxLayout(self.overview_tab)
+        overview_title = QLabel("Обзор доходов и расходов")
+        overview_title.setFont(QFont(overview_title.font().family(), 12, QFont.Bold))
+        overview_layout.addWidget(overview_title)
+        period_row = QHBoxLayout()
+        period_row.addWidget(QLabel("Период:"))
+        self.overview_year_combo = QComboBox()
+        from datetime import date
+        year = date.today().year
+        for y in range(year, year - 6, -1):
+            self.overview_year_combo.addItem(str(y), y)
+        self.overview_year_combo.addItem("Произвольный", None)
+        period_row.addWidget(self.overview_year_combo)
+        self.overview_date_from = QDateEdit()
+        self.overview_date_from.setCalendarPopup(True)
+        self.overview_date_from.setDate(QDate(year, 1, 1))
+        period_row.addWidget(QLabel("С:"))
+        period_row.addWidget(self.overview_date_from)
+        self.overview_date_to = QDateEdit()
+        self.overview_date_to.setCalendarPopup(True)
+        self.overview_date_to.setDate(QDate.currentDate())
+        period_row.addWidget(QLabel("По:"))
+        period_row.addWidget(self.overview_date_to)
+        overview_refresh_btn = QPushButton("Обновить")
+        overview_refresh_btn.clicked.connect(self._load_overview)
+        period_row.addWidget(overview_refresh_btn)
+        period_row.addStretch()
+        overview_layout.addLayout(period_row)
+        self.overview_scroll = QScrollArea()
+        self.overview_scroll.setWidgetResizable(True)
+        self.overview_content = QWidget()
+        self.overview_content_layout = QVBoxLayout(self.overview_content)
+        self.overview_scroll.setWidget(self.overview_content)
+        overview_layout.addWidget(self.overview_scroll)
+        self.tabs.addTab(self.overview_tab, "Общее")
+
+        # Вкладка «Настройки»
+        self.settings_tab = QWidget()
+        settings_layout = QVBoxLayout(self.settings_tab)
+        settings_title = QLabel("Настройки программы")
+        settings_title.setFont(QFont(settings_title.font().family(), 12, QFont.Bold))
+        settings_layout.addWidget(settings_title)
+        models_widget = __import__("models_dialog", fromlist=["ModelsManagementWidget"]).ModelsManagementWidget
+        self.models_widget = models_widget(conn)
+        settings_layout.addWidget(self.models_widget)
+        settings_sep = QLabel("─" * 60)
+        settings_layout.addWidget(settings_sep)
+        timeout_row = QHBoxLayout()
+        timeout_row.addWidget(QLabel("Таймаут запросов (сек):"))
+        self.settings_timeout = QLineEdit()
+        self.settings_timeout.setText(str(db.get_setting(conn, "request_timeout") or "30"))
+        timeout_row.addWidget(self.settings_timeout)
+        timeout_btn = QPushButton("Сохранить")
+        timeout_btn.clicked.connect(lambda: self._save_setting("request_timeout", self.settings_timeout.text()))
+        timeout_row.addWidget(timeout_btn)
+        settings_layout.addLayout(timeout_row)
+        tokens_row = QHBoxLayout()
+        tokens_row.addWidget(QLabel("Макс. токенов:"))
+        self.settings_tokens = QLineEdit()
+        self.settings_tokens.setText(str(db.get_setting(conn, "max_tokens") or "2048"))
+        tokens_row.addWidget(self.settings_tokens)
+        tokens_btn = QPushButton("Сохранить")
+        tokens_btn.clicked.connect(lambda: self._save_setting("max_tokens", self.settings_tokens.text() or "2048"))
+        tokens_row.addWidget(tokens_btn)
+        settings_layout.addLayout(tokens_row)
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Тема:"))
+        self.settings_theme = QComboBox()
+        self.settings_theme.addItem("Светлая", "light")
+        self.settings_theme.addItem("Тёмная", "dark")
+        saved_theme = db.get_setting(conn, "ui_theme") or "light"
+        idx = self.settings_theme.findData(saved_theme)
+        if idx >= 0:
+            self.settings_theme.setCurrentIndex(idx)
+        self.settings_theme.currentIndexChanged.connect(self._on_theme_changed)
+        theme_row.addWidget(self.settings_theme)
+        theme_row.addStretch()
+        settings_layout.addLayout(theme_row)
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("Размер шрифта:"))
+        self.settings_font = QComboBox()
+        for s in ("8", "9", "10", "11", "12", "14", "16", "18", "20"):
+            self.settings_font.addItem(f"{s} pt", s)
+        saved_font = db.get_setting(conn, "font_size") or "10"
+        fi = self.settings_font.findData(saved_font)
+        if fi >= 0:
+            self.settings_font.setCurrentIndex(fi)
+        self.settings_font.currentIndexChanged.connect(self._on_font_changed)
+        font_row.addWidget(self.settings_font)
+        font_row.addStretch()
+        settings_layout.addLayout(font_row)
+        dedup_btn = QPushButton("Удалить дубликаты транзакций")
+        dedup_btn.clicked.connect(self._on_dedup)
+        settings_layout.addWidget(dedup_btn)
+        settings_layout.addStretch()
+        self.tabs.addTab(self.settings_tab, "Настройки")
 
         # Вкладка «Графики» — один холст с двумя subplot
         self.charts_tab = QWidget()
@@ -213,16 +354,54 @@ class MainWindow(QMainWindow):
 
         self._last_goal_result = None  # (text, from_ai) для отображения в «Финансовые советы»
 
-        # При запуске удаляем дубликаты (дата + описание + сумма), затем загружаем таблицу и рекомендации
         db.remove_duplicates(self._conn)
+        self._refresh_filter_combos()
         self._reload_table()
         self._refresh_recommendations()
         self._refresh_charts()
+        theme = db.get_setting(conn, "ui_theme") or "light"
+        self._apply_theme(theme)
+        font_size = db.get_setting(conn, "font_size") or "10"
+        self._apply_font_size(int(font_size))
+
+    def _get_search_filters(self):
+        """Собрать фильтры для поиска."""
+        date_from = self.date_from_edit.date().toString("yyyy-MM-dd")
+        date_to = self.date_to_edit.date().toString("yyyy-MM-dd")
+        cat = self.category_filter.currentData()
+        card = self.card_filter.currentData()
+        op_type = self.op_type_filter.currentData() or "all"
+        return {
+            "query": self.search_edit.text().strip(),
+            "date_from": date_from,
+            "date_to": date_to,
+            "category": cat,
+            "card_number": card,
+            "operation_type": op_type,
+        }
+
+    def _refresh_filter_combos(self):
+        """Обновить комбобоксы категорий и карт."""
+        cats = db.get_distinct_categories(self._conn)
+        self.category_filter.clear()
+        self.category_filter.addItem("— Все категории —", None)
+        for c in sorted(cats):
+            self.category_filter.addItem(c, c)
+        cards = db.get_distinct_cards(self._conn)
+        self.card_filter.clear()
+        self.card_filter.addItem("— Все карты —", None)
+        for c in cards:
+            self.card_filter.addItem(c or "—", c)
+
+    def _on_search(self):
+        self._reload_table()
 
     def _reload_table(self):
-        """Заполнить таблицу из БД. В колонке 0 в UserRole хранится id."""
+        """Заполнить таблицу из БД с учётом фильтров."""
+        filters = self._get_search_filters()
+        rows = db.search_transactions(self._conn, **filters)
         self.model.removeRows(0, self.model.rowCount())
-        for row in db.get_all_transactions(self._conn):
+        for row in rows:
             id_item = QStandardItem(row["date"])
             id_item.setData(row["id"], Qt.UserRole)
             id_item.setEditable(False)
@@ -234,7 +413,6 @@ class MainWindow(QMainWindow):
                 QStandardItem(str(row["amount"])),
                 QStandardItem(row["category"] or "Без категории"),
             ])
-        # Только колонка «Категория» (индекс 4) редактируемая
         for r in range(self.model.rowCount()):
             for c in (0, 1, 2, 3):
                 it = self.model.item(r, c)
@@ -278,38 +456,41 @@ class MainWindow(QMainWindow):
                 self.recommendations_content_layout.addWidget(why_label)
                 self.recommendations_content_layout.addSpacing(12)
 
-    def _on_goal_request(self):
-        """Запрос рекомендаций по финансовой цели (в главном потоке — БД, в фоне — только ИИ)."""
-        target_amount = self.goal_amount_spin.value()
-        target_date = self.goal_date_edit.date()
-        today = QDate.currentDate()
-        min_date = today.addMonths(1)
-        if target_amount < 0:
-            self.statusBar().showMessage("Целевая сумма должна быть >= 0")
-            return
-        if target_date < min_date:
-            self.statusBar().showMessage("Дата окончания должна быть не раньше чем через месяц")
-            return
-        # ISO-формат даты (yyyy-MM-dd) для API и расчётов
-        target_date_str = f"{target_date.year():04d}-{target_date.month():02d}-{target_date.day():02d}"
-        # Сбор метрик и rule-based расчёт в главном потоке (БД)
-        from financial_agent import build_goal_metrics, calc_goal_monthly_savings
-        metrics = build_goal_metrics(self._conn, target_amount, target_date_str)
-        current_savings = metrics.get("current_savings", 0.0)
-        monthly_rub, rule_text = calc_goal_monthly_savings(target_amount, target_date_str, current_savings)
-        metrics["monthly_savings_rub"] = monthly_rub  # готовая сумма для ИИ
-        self.goal_request_btn.setEnabled(False)
-        self.goal_result_frame.setVisible(False)
+    def _on_advice_request(self):
+        """Запрос рекомендаций «как сократить расходы» (в фоне — ИИ)."""
+        from financial_agent import build_llm_metrics
+        metrics = build_llm_metrics(self._conn)
+        recs = financial_agent.get_recommendations(self._conn)
+        rule_text = "\n\n".join(f"{r.text}\n{r.why}" for r in recs) if recs else "Недостаточно данных для анализа."
+        api_config = None
+        models = db.get_active_models(self._conn)
+        if models:
+            m = models[0]
+            key = (m.get("api_key") or "").strip()
+            if "=" in key:
+                key = key.split("=", 1)[1].strip()
+            if not key:
+                import os
+                key = os.environ.get(m.get("api_id", ""), "")
+            if key:
+                api_config = {
+                    "api_url": m.get("api_url"),
+                    "api_key": key,
+                    "model": m.get("name"),
+                    "timeout": int(db.get_setting(self._conn, "request_timeout") or 60),
+                }
+        self.advice_request_btn.setEnabled(False)
         self._goal_worker.metrics = metrics
         self._goal_worker.rule_text = rule_text
-        self._goal_worker.consent = self.goal_consent_check.isChecked()
+        self._goal_worker.consent = self.advice_consent_check.isChecked()
+        self._goal_worker.api_config = api_config
         self._goal_thread.start()
 
     def _on_goal_finished(self, payload):
         """Показать результат в окне «Финансовые советы»."""
         self._goal_thread.quit()
         self._goal_thread.wait()
-        self.goal_request_btn.setEnabled(True)
+        self.advice_request_btn.setEnabled(True)
         try:
             text, from_ai = payload
         except (TypeError, ValueError):
@@ -317,12 +498,32 @@ class MainWindow(QMainWindow):
         self._last_goal_result = (text or "", from_ai)
         self._refresh_recommendations()
 
-    def _on_remove_duplicates(self):
-        """Удалить дубликаты транзакций (по дате, описанию, сумме, номеру карты), обновить таблицу и рекомендации."""
-        deleted = db.remove_duplicates(self._conn)
-        self._reload_table()
-        self._refresh_charts()
-        self.statusBar().showMessage(f"Удалено дубликатов: {deleted}")
+    def _on_add_transaction(self):
+        """Добавить транзакцию через диалог."""
+        from transaction_dialog import TransactionEditDialog
+        dlg = TransactionEditDialog(self, conn=self._conn, mode="add")
+        if dlg.exec_() == dlg.Accepted:
+            self._refresh_filter_combos()
+            self._reload_table()
+            self.statusBar().showMessage("Транзакция добавлена")
+
+    def _on_delete_transaction(self):
+        """Удалить выделенную транзакцию."""
+        idx = self.table.currentIndex()
+        if not idx.isValid():
+            self.statusBar().showMessage("Выберите строку для удаления")
+            return
+        row_id = self.model.index(idx.row(), 0).data(Qt.UserRole)
+        if row_id is None:
+            return
+        if QMessageBox.question(
+            self, "Подтверждение", "Удалить выбранную транзакцию?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        if db.delete_transaction(self._conn, int(row_id)):
+            self._reload_table()
+            self.statusBar().showMessage("Транзакция удалена")
 
     def _on_load_csv(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -335,6 +536,7 @@ class MainWindow(QMainWindow):
             return
         try:
             n = csv_import.import_from_csv(self._conn, path)
+            self._refresh_filter_combos()
             self._reload_table()  # также обновляет рекомендации
             self.statusBar().showMessage(f"Загружено записей: {n}")
         except Exception as e:
@@ -347,6 +549,205 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         if self.tabs.widget(index) == self.charts_tab:
             self._refresh_charts()
+        elif self.tabs.widget(index) == self.goals_tab:
+            self._load_goals()
+        elif self.tabs.widget(index) == self.overview_tab:
+            self._load_overview()
+
+    def _load_goals(self):
+        """Загрузить таблицу целей."""
+        from datetime import date, datetime
+        goals = db.get_all_goals(self._conn)
+        self.goals_table.setRowCount(len(goals))
+        today = date.today()
+        for i, g in enumerate(goals):
+            target = float(g.get("target_amount", 0))
+            progress_val = float(g.get("current_progress", 0))
+            end_s = g.get("end_date", "")[:10]
+            try:
+                end = datetime.strptime(end_s, "%Y-%m-%d").date()
+                months = max(1, (end.year - today.year) * 12 + (end.month - today.month))
+                monthly = round(max(0, target - progress_val) / months, 2) if months else 0
+            except (ValueError, TypeError):
+                monthly = 0
+            pct = round(progress_val / target * 100, 1) if target > 0 else 0
+            self.goals_table.setItem(i, 0, QTableWidgetItem(str(g.get("description", ""))))
+            self.goals_table.setItem(i, 1, QTableWidgetItem(f"{target:,.0f}".replace(",", " ")))
+            self.goals_table.setItem(i, 2, QTableWidgetItem(g.get("start_date", "")[:10]))
+            self.goals_table.setItem(i, 3, QTableWidgetItem(g.get("end_date", "")[:10]))
+            self.goals_table.setItem(i, 4, QTableWidgetItem(f"{progress_val:,.0f}".replace(",", " ")))
+            self.goals_table.setItem(i, 5, QTableWidgetItem(f"{monthly:,.0f}".replace(",", " ")))
+            pb = QProgressBar()
+            pb.setMaximum(100)
+            pb.setValue(min(100, int(pct)))
+            pb.setMaximumWidth(120)
+            self.goals_table.setCellWidget(i, 6, pb)
+            self.goals_table.item(i, 0).setData(Qt.UserRole, g.get("id"))
+
+    def _on_add_goal(self):
+        from goal_dialog import GoalEditDialog
+        dlg = GoalEditDialog(self, conn=self._conn, mode="add")
+        if dlg.exec_() == dlg.Accepted:
+            self._load_goals()
+
+    def _on_edit_goal(self):
+        row = self.goals_table.currentRow()
+        if row < 0:
+            self.statusBar().showMessage("Выберите цель")
+            return
+        gid = self.goals_table.item(row, 0).data(Qt.UserRole)
+        if not gid:
+            return
+        goal = db.get_goal_by_id(self._conn, int(gid))
+        if not goal:
+            return
+        from goal_dialog import GoalEditDialog
+        dlg = GoalEditDialog(self, conn=self._conn, mode="edit", goal_data=goal)
+        if dlg.exec_() == dlg.Accepted:
+            self._load_goals()
+
+    def _on_delete_goal(self):
+        row = self.goals_table.currentRow()
+        if row < 0:
+            self.statusBar().showMessage("Выберите цель")
+            return
+        gid = self.goals_table.item(row, 0).data(Qt.UserRole)
+        if not gid:
+            return
+        if QMessageBox.question(
+            self, "Подтверждение", "Удалить выбранную цель?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        if db.delete_goal(self._conn, int(gid)):
+            self._load_goals()
+
+    def _save_setting(self, key: str, value: str):
+        db.set_setting(self._conn, key, value)
+        self.statusBar().showMessage(f"Сохранено: {key}")
+
+    def _on_theme_changed(self, index):
+        theme = self.settings_theme.currentData()
+        if theme:
+            db.set_setting(self._conn, "ui_theme", theme)
+            self._apply_theme(theme)
+
+    def _on_font_changed(self, index):
+        size = self.settings_font.currentData()
+        if size:
+            db.set_setting(self._conn, "font_size", size)
+            self._apply_font_size(int(size))
+
+    def _apply_theme(self, theme: str):
+        from PyQt5.QtGui import QPalette, QColor
+        app = QApplication.instance()
+        if theme == "dark":
+            p = QPalette()
+            p.setColor(QPalette.Window, QColor(53, 53, 53))
+            p.setColor(QPalette.WindowText, QColor(255, 255, 255))
+            p.setColor(QPalette.Base, QColor(35, 35, 35))
+            p.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+            p.setColor(QPalette.Text, QColor(255, 255, 255))
+            p.setColor(QPalette.Button, QColor(53, 53, 53))
+            p.setColor(QPalette.ButtonText, QColor(255, 255, 255))
+            app.setPalette(p)
+        else:
+            app.setPalette(app.style().standardPalette())
+
+    def _apply_font_size(self, size: int):
+        f = QApplication.instance().font()
+        f.setPointSize(size)
+        QApplication.instance().setFont(f)
+
+    def _on_dedup(self):
+        n = db.remove_duplicates(self._conn)
+        self._reload_table()
+        self._refresh_charts()
+        self.statusBar().showMessage(f"Удалено дубликатов: {n}")
+
+    def _load_overview(self):
+        """Загрузить вкладку «Общее»: по категориям, по картам, по месяцам."""
+        year_val = self.overview_year_combo.currentData()
+        if year_val is not None:
+            date_from = f"{year_val}-01-01"
+            date_to = f"{year_val}-12-31"
+        else:
+            date_from = self.overview_date_from.date().toString("yyyy-MM-dd")
+            date_to = self.overview_date_to.date().toString("yyyy-MM-dd")
+        while self.overview_content_layout.count():
+            child = self.overview_content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        # По категориям
+        cat_data = db.get_income_expenses_by_category(self._conn, date_from, date_to)
+        total_income = sum(r["income"] for r in cat_data)
+        total_exp = sum(r["expenses"] for r in cat_data)
+        cat_label = QLabel("По категориям")
+        cat_label.setFont(QFont(cat_label.font().family(), 10, QFont.Bold))
+        self.overview_content_layout.addWidget(cat_label)
+        cat_table = QTableWidget()
+        cat_table.setColumnCount(5)
+        cat_table.setHorizontalHeaderLabels(["Категория", "Доходы", "Расходы", "% доходов", "% расходов"])
+        cat_table.setRowCount(len(cat_data))
+        for i, r in enumerate(cat_data):
+            inc = float(r["income"])
+            exp = float(r["expenses"])
+            pct_inc = f"{inc / total_income * 100:.1f}%" if total_income else "—"
+            pct_exp = f"{exp / total_exp * 100:.1f}%" if total_exp else "—"
+            cat_table.setItem(i, 0, QTableWidgetItem(str(r["category"])))
+            cat_table.setItem(i, 1, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
+            cat_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
+            cat_table.setItem(i, 3, QTableWidgetItem(pct_inc))
+            cat_table.setItem(i, 4, QTableWidgetItem(pct_exp))
+        cat_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.overview_content_layout.addWidget(cat_table)
+        self.overview_content_layout.addSpacing(16)
+        # По картам
+        card_data = db.get_income_expenses_by_card(self._conn, date_from, date_to)
+        card_label = QLabel("По картам")
+        card_label.setFont(QFont(card_label.font().family(), 10, QFont.Bold))
+        self.overview_content_layout.addWidget(card_label)
+        card_table = QTableWidget()
+        card_table.setColumnCount(5)
+        card_table.setHorizontalHeaderLabels(["Карта", "Доходы", "Расходы", "% доходов", "% расходов"])
+        card_table.setRowCount(len(card_data))
+        for i, r in enumerate(card_data):
+            inc = float(r["income"])
+            exp = float(r["expenses"])
+            pct_inc = f"{inc / total_income * 100:.1f}%" if total_income else "—"
+            pct_exp = f"{exp / total_exp * 100:.1f}%" if total_exp else "—"
+            card_table.setItem(i, 0, QTableWidgetItem(str(r["card"])))
+            card_table.setItem(i, 1, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
+            card_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
+            card_table.setItem(i, 3, QTableWidgetItem(pct_inc))
+            card_table.setItem(i, 4, QTableWidgetItem(pct_exp))
+        card_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.overview_content_layout.addWidget(card_table)
+        self.overview_content_layout.addSpacing(16)
+        # По месяцам (если год)
+        if year_val is not None:
+            month_data = db.get_income_expenses_by_month(self._conn, year_val)
+            if month_data:
+                month_label = QLabel("По месяцам")
+                month_label.setFont(QFont(month_label.font().family(), 10, QFont.Bold))
+                self.overview_content_layout.addWidget(month_label)
+                month_table = QTableWidget()
+                month_table.setColumnCount(5)
+                month_table.setHorizontalHeaderLabels(["Месяц", "Доходы", "Расходы", "Сальдо", "% от года"])
+                month_table.setRowCount(len(month_data))
+                year_total = sum(float(r["income"]) + float(r["expenses"]) for r in month_data) or 1
+                for i, r in enumerate(month_data):
+                    inc = float(r["income"])
+                    exp = float(r["expenses"])
+                    bal = inc - exp
+                    pct = (inc + exp) / year_total * 100 if year_total else 0
+                    month_table.setItem(i, 0, QTableWidgetItem(str(r["month"])))
+                    month_table.setItem(i, 1, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
+                    month_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
+                    month_table.setItem(i, 3, QTableWidgetItem(f"{bal:,.0f}".replace(",", " ")))
+                    month_table.setItem(i, 4, QTableWidgetItem(f"{pct:.1f}%"))
+                month_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+                self.overview_content_layout.addWidget(month_table)
 
     def _refresh_charts(self):
         """Обновить круговую и столбчатую диаграммы по данным из БД."""

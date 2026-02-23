@@ -266,6 +266,25 @@ def get_existing_by_key(conn: sqlite3.Connection) -> dict[tuple[str, str, float]
     return result
 
 
+def get_existing_by_datetime(conn: sqlite3.Connection) -> dict[str, list[dict]]:
+    """Индекс по дате+времени: date_str -> список [{id, description, amount, category, card_number}]."""
+    cur = conn.execute(
+        "SELECT id, date, description, amount, category, card_number FROM transactions"
+    )
+    result: dict[str, list] = {}
+    for row in cur.fetchall():
+        dt = row[1]
+        entry = {
+            "id": row[0],
+            "description": (row[2] or "").strip(),
+            "amount": row[3],
+            "category": (row[4] or "Без категории").strip(),
+            "card_number": (row[5] or "").strip(),
+        }
+        result.setdefault(dt, []).append(entry)
+    return result
+
+
 def update_card_if_empty(
     conn: sqlite3.Connection, date: str, description: str, amount: float, card_number: str
 ) -> bool:

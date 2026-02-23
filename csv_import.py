@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from database import (
-    get_existing_by_key,
+    get_existing_by_datetime,
     get_existing_keys,
     insert_transactions,
     update_card_if_empty,
@@ -104,58 +104,86 @@ def _parse_csv_rows(path: str | Path) -> list[tuple]:
 
 def check_csv_conflicts(conn: sqlite3.Connection, path: str | Path) -> tuple[list, list]:
     """
-    Проверяет CSV на конфликты с существующими записями.
+    Проверяет CSV на конфликты: дата и время совпадают, но одно из полей (description, amount, category, card_number) отличается.
     Возвращает (new_rows, conflicts).
-    conflicts: список dict с полями csv_row, db_row для отображения.
     """
     rows = _parse_csv_rows(path)
-    existing = get_existing_by_key(conn)
+    existing = get_existing_by_datetime(conn)
     new_rows = []
     conflicts = []
     for r in rows:
-        key = (r[0], r[1], r[2])
+        date_iso = r[0]
+        desc_csv = (r[1] or "").strip()
+        amt_csv = r[2]
         cat_csv = (r[3] or "Без категории").strip()
         card_csv = (r[4] or "").strip()
-        if key not in existing:
+        if date_iso not in existing:
             new_rows.append(r)
             continue
-        db_row = existing[key]
-        cat_db = (db_row.get("category") or "Без категории").strip()
-        card_db = (db_row.get("card_number") or "").strip()
-        if cat_csv != cat_db or card_csv != card_db:
-            conflicts.append({
-                "csv_row": {"date": r[0], "description": r[1], "amount": r[2], "category": cat_csv, "card_number": card_csv},
-                "db_row": {"id": db_row["id"], "category": cat_db, "card_number": card_db},
-            })
+        for db_row in existing[date_iso]:
+            desc_db = (db_row.get("description") or "").strip()
+            amt_db = db_row.get("amount", 0)
+            cat_db = (db_row.get("category") or "Без категории").strip()
+            card_db = (db_row.get("card_number") or "").strip()
+            differs = (
+                desc_csv != desc_db
+                or abs(float(amt_csv) - float(amt_db)) > 1e-9
+                or cat_csv != cat_db
+                or card_csv != card_db
+            )
+            if differs:
+                conflicts.append({
+                    "csv_row": {"date": date_iso, "description": desc_csv, "amount": amt_csv, "category": cat_csv, "card_number": card_csv},
+                    "db_row": {"id": db_row["id"], "description": desc_db, "amount": amt_db, "category": cat_db, "card_number": card_db},
+                })
+            break  # конфликт с первым совпадением по дате
     return new_rows, conflicts
 
 
 def import_from_csv(conn: sqlite3.Connection, path: str | Path, overwrite_conflicts: bool = False) -> int:
     """
     Парсит CSV Тинькофф, вставляет транзакции в БД.
-    При overwrite_conflicts=True перезаписывает конфликтующие записи данными из CSV.
+    При overwrite_conflicts=True перезаписывает конфликтующие записи (совпадение по дате+времени, различие полей).
     Возвращает количество загруженных/обновлённых строк.
     """
     rows = _parse_csv_rows(path)
-    existing = get_existing_by_key(conn)
+    existing = get_existing_by_datetime(conn)
     new_rows = []
     updated = 0
     for r in rows:
-        key = (r[0], r[1], r[2])
+        date_iso = r[0]
+        desc_csv = (r[1] or "").strip()
+        amt_csv = r[2]
         cat_csv = (r[3] or "Без категории").strip()
         card_csv = (r[4] or "").strip()
-        if key not in existing:
+        if date_iso not in existing:
             new_rows.append(r)
             continue
-        db_row = existing[key]
-        cat_db = (db_row.get("category") or "Без категории").strip()
-        card_db = (db_row.get("card_number") or "").strip()
-        if cat_csv != cat_db or card_csv != card_db:
-            if overwrite_conflicts:
-                update_transaction(conn, db_row["id"], category=cat_csv, card_number=card_csv)
+        db_rows = existing[date_iso]
+        for db_row in db_rows:
+            desc_db = (db_row.get("description") or "").strip()
+            amt_db = db_row.get("amount", 0)
+            cat_db = (db_row.get("category") or "Без категории").strip()
+            card_db = (db_row.get("card_number") or "").strip()
+            differs = (
+                desc_csv != desc_db
+                or abs(float(amt_csv) - float(amt_db)) > 1e-9
+                or cat_csv != cat_db
+                or card_csv != card_db
+            )
+            if differs and overwrite_conflicts:
+                update_transaction(
+                    conn,
+                    db_row["id"],
+                    description=desc_csv,
+                    amount=float(amt_csv),
+                    category=cat_csv,
+                    card_number=card_csv,
+                )
                 updated += 1
-        elif card_csv and not card_db:
-            if update_card_if_empty(conn, r[0], r[1], r[2], card_csv):
-                updated += 1
+            elif not differs and card_csv and not card_db:
+                if update_card_if_empty(conn, r[0], r[1], r[2], card_csv):
+                    updated += 1
+            break  # обрабатываем первое совпадение по дате
     insert_transactions(conn, new_rows)
     return len(new_rows) + updated

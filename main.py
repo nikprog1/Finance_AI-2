@@ -95,14 +95,6 @@ class CategoryDelegate(QStyledItemDelegate):
     def setModelData(self, editor: QComboBox, model, index):
         category = editor.currentText()
         model.setData(index, category, Qt.EditRole)
-        # id хранится в UserRole в колонке 0 той же строки
-        row = index.row()
-        id_index = model.index(row, 0)
-        row_id = model.data(id_index, Qt.UserRole)
-        if row_id is not None:
-            conn = getattr(self, "_conn", None)
-            if conn:
-                db.update_category(conn, int(row_id), category)
 
 
 class MainWindow(QMainWindow):
@@ -165,9 +157,9 @@ class MainWindow(QMainWindow):
         search_btn = QPushButton("Поиск")
         search_btn.clicked.connect(self._on_search)
         filter_row.addWidget(search_btn)
-        add_btn = QPushButton("Добавить")
-        add_btn.clicked.connect(self._on_add_transaction)
-        filter_row.addWidget(add_btn)
+        edit_btn = QPushButton("Редактировать")
+        edit_btn.clicked.connect(self._on_edit_transaction_focus)
+        filter_row.addWidget(edit_btn)
         del_btn = QPushButton("Удалить")
         del_btn.clicked.connect(self._on_delete_transaction)
         filter_row.addWidget(del_btn)
@@ -181,8 +173,7 @@ class MainWindow(QMainWindow):
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.setItemDelegateForColumn(4, CategoryDelegate(self))
-        self.table_tab._delegate = self.table.itemDelegateForColumn(4)
-        self.table_tab._delegate._conn = conn
+        self.model.dataChanged.connect(self._on_transaction_data_changed)
         table_and_panel.addWidget(self.table, 1)
 
         # Панель рекомендаций (справа, ~300 px)
@@ -414,10 +405,9 @@ class MainWindow(QMainWindow):
                 QStandardItem(row["category"] or "Без категории"),
             ])
         for r in range(self.model.rowCount()):
-            for c in (0, 1, 2, 3):
-                it = self.model.item(r, c)
-                if it:
-                    it.setEditable(False)
+            it0 = self.model.item(r, 0)
+            if it0:
+                it0.setEditable(False)  # Дата — только чтение
         self._refresh_recommendations()
 
     def _refresh_recommendations(self):
@@ -498,14 +488,45 @@ class MainWindow(QMainWindow):
         self._last_goal_result = (text or "", from_ai)
         self._refresh_recommendations()
 
-    def _on_add_transaction(self):
-        """Добавить транзакцию через диалог."""
-        from transaction_dialog import TransactionEditDialog
-        dlg = TransactionEditDialog(self, conn=self._conn, mode="add")
-        if dlg.exec_() == dlg.Accepted:
-            self._refresh_filter_combos()
-            self._reload_table()
-            self.statusBar().showMessage("Транзакция добавлена")
+    def _on_edit_transaction_focus(self):
+        """Фокус на таблице для inline-редактирования."""
+        self.table.setFocus()
+        idx = self.table.currentIndex()
+        if not idx.isValid() and self.model.rowCount() > 0:
+            self.table.selectRow(0)
+        self.statusBar().showMessage("Дважды щёлкните по ячейке для редактирования")
+
+    def _on_transaction_data_changed(self, top_left, bottom_right, roles):
+        """Auto-save при изменении данных (кроме даты)."""
+        if Qt.EditRole not in roles:
+            return
+        row = top_left.row()
+        col = top_left.column()
+        if col == 0:
+            return  # Дата — только чтение
+        id_index = self.model.index(row, 0)
+        row_id = self.model.data(id_index, Qt.UserRole)
+        if row_id is None:
+            return
+        try:
+            row_id = int(row_id)
+        except (ValueError, TypeError):
+            return
+        kwargs = {}
+        if col == 1:
+            kwargs["card_number"] = (self.model.data(top_left, Qt.EditRole) or "").strip()
+        elif col == 2:
+            kwargs["description"] = (self.model.data(top_left, Qt.EditRole) or "").strip()
+        elif col == 3:
+            try:
+                kwargs["amount"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
+            except (ValueError, TypeError):
+                return
+        elif col == 4:
+            kwargs["category"] = (self.model.data(top_left, Qt.EditRole) or "Без категории").strip()
+        if kwargs and db.update_transaction(self._conn, row_id, **kwargs):
+            self.statusBar().showMessage("Сохранено")
+            self._refresh_recommendations()
 
     def _on_delete_transaction(self):
         """Удалить выделенную транзакцию."""
@@ -535,9 +556,24 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            n = csv_import.import_from_csv(self._conn, path)
+            new_rows, conflicts = csv_import.check_csv_conflicts(self._conn, path)
+            if conflicts:
+                reply = QMessageBox.question(
+                    self,
+                    "Конфликты при импорте",
+                    f"Найдено {len(conflicts)} конфликт(ов): данные в CSV отличаются от записей в БД. "
+                    "Перезаписать существующие записи данными из CSV?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    self.statusBar().showMessage("Импорт отменён (конфликты)")
+                    return
+                n = csv_import.import_from_csv(self._conn, path, overwrite_conflicts=True)
+            else:
+                n = csv_import.import_from_csv(self._conn, path)
             self._refresh_filter_combos()
-            self._reload_table()  # также обновляет рекомендации
+            self._reload_table()
             self.statusBar().showMessage(f"Загружено записей: {n}")
         except Exception as e:
             self.statusBar().showMessage(f"Ошибка: {e}")
@@ -659,6 +695,11 @@ class MainWindow(QMainWindow):
         f.setPointSize(size)
         QApplication.instance().setFont(f)
 
+    def _on_card_account_type_changed(self, card_number: str, account_type: str):
+        """Сохранение типа счёта при выборе в dropdown."""
+        db.set_card_account_type(self._conn, card_number, account_type)
+        self.statusBar().showMessage(f"Тип счёта для {card_number}: {account_type}")
+
     def _on_dedup(self):
         n = db.remove_duplicates(self._conn)
         self._reload_table()
@@ -708,19 +749,30 @@ class MainWindow(QMainWindow):
         card_label.setFont(QFont(card_label.font().family(), 10, QFont.Bold))
         self.overview_content_layout.addWidget(card_label)
         card_table = QTableWidget()
-        card_table.setColumnCount(5)
-        card_table.setHorizontalHeaderLabels(["Карта", "Доходы", "Расходы", "% доходов", "% расходов"])
+        card_table.setColumnCount(6)
+        card_table.setHorizontalHeaderLabels(["Карта", "Тип счёта", "Доходы", "Расходы", "% доходов", "% расходов"])
         card_table.setRowCount(len(card_data))
         for i, r in enumerate(card_data):
+            card = str(r["card"])
             inc = float(r["income"])
             exp = float(r["expenses"])
             pct_inc = f"{inc / total_income * 100:.1f}%" if total_income else "—"
             pct_exp = f"{exp / total_exp * 100:.1f}%" if total_exp else "—"
-            card_table.setItem(i, 0, QTableWidgetItem(str(r["card"])))
-            card_table.setItem(i, 1, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
-            card_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
-            card_table.setItem(i, 3, QTableWidgetItem(pct_inc))
-            card_table.setItem(i, 4, QTableWidgetItem(pct_exp))
+            card_table.setItem(i, 0, QTableWidgetItem(card))
+            acc_combo = QComboBox()
+            acc_combo.addItems(db.ACCOUNT_TYPES)
+            current_type = db.get_card_account_type(self._conn, card)
+            idx = acc_combo.findText(current_type)
+            if idx >= 0:
+                acc_combo.setCurrentIndex(idx)
+            acc_combo.currentTextChanged.connect(
+                lambda t, c=card: self._on_card_account_type_changed(c, t)
+            )
+            card_table.setCellWidget(i, 1, acc_combo)
+            card_table.setItem(i, 2, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
+            card_table.setItem(i, 3, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
+            card_table.setItem(i, 4, QTableWidgetItem(pct_inc))
+            card_table.setItem(i, 5, QTableWidgetItem(pct_exp))
         card_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.overview_content_layout.addWidget(card_table)
         self.overview_content_layout.addSpacing(16)

@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS models (
 )
 """
 
+CREATE_CARD_ACCOUNTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS card_accounts (
+    card_number TEXT PRIMARY KEY,
+    account_type TEXT NOT NULL DEFAULT 'Желтый кошелек'
+)
+"""
+
 CREATE_SETTINGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +88,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     conn.execute(CREATE_GOALS_TABLE_SQL)
+    conn.execute(CREATE_CARD_ACCOUNTS_TABLE_SQL)
     conn.execute(CREATE_MODELS_TABLE_SQL)
     conn.execute(CREATE_SETTINGS_TABLE_SQL)
     try:
@@ -244,6 +252,18 @@ def get_existing_keys(conn: sqlite3.Connection) -> set[tuple[str, str, float]]:
         "SELECT date, description, amount FROM transactions"
     )
     return {tuple(row) for row in cur.fetchall()}
+
+
+def get_existing_by_key(conn: sqlite3.Connection) -> dict[tuple[str, str, float], dict]:
+    """Для каждого ключа (date, description, amount) возвращает {id, category, card_number}."""
+    cur = conn.execute(
+        "SELECT id, date, description, amount, category, card_number FROM transactions"
+    )
+    result = {}
+    for row in cur.fetchall():
+        key = (row[1], row[2], row[3])
+        result[key] = {"id": row[0], "category": row[4] or "Без категории", "card_number": (row[5] or "").strip()}
+    return result
 
 
 def update_card_if_empty(
@@ -638,3 +658,33 @@ def get_distinct_categories(conn: sqlite3.Connection) -> list[str]:
 def get_distinct_cards(conn: sqlite3.Connection) -> list[str]:
     cur = conn.execute("SELECT DISTINCT card_number FROM transactions WHERE TRIM(COALESCE(card_number, '')) <> '' ORDER BY card_number")
     return [row[0] or "" for row in cur.fetchall()]
+
+
+ACCOUNT_TYPES = ("Желтый кошелек", "Зеленый кошелек")
+
+
+def get_card_account_type(conn: sqlite3.Connection, card_number: str) -> str:
+    """Тип счёта для карты. По умолчанию «Желтый кошелек»."""
+    card = (card_number or "").strip()
+    if not card:
+        return ACCOUNT_TYPES[0]
+    cur = conn.execute(
+        "SELECT account_type FROM card_accounts WHERE card_number = ?",
+        (card,),
+    )
+    row = cur.fetchone()
+    if row and row[0] in ACCOUNT_TYPES:
+        return row[0]
+    return ACCOUNT_TYPES[0]
+
+
+def set_card_account_type(conn: sqlite3.Connection, card_number: str, account_type: str) -> None:
+    """Установить тип счёта для карты."""
+    card = (card_number or "").strip()
+    if not card or account_type not in ACCOUNT_TYPES:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO card_accounts (card_number, account_type) VALUES (?, ?)",
+        (card, account_type),
+    )
+    conn.commit()

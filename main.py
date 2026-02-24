@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal, QObject
 
 from env_loader import load_env
 from logging_config import setup_logging
+from version import __version__
 
 logger = logging.getLogger(__name__)
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
@@ -101,7 +102,7 @@ class MainWindow(QMainWindow):
     def __init__(self, conn: sqlite3.Connection):
         super().__init__()
         self._conn = conn
-        self.setWindowTitle("Bank Statement Analyzer MVP")
+        self.setWindowTitle(f"Bank Statement Analyzer MVP v{__version__}")
         self.setMinimumSize(800, 600)
         self.resize(900, 650)
 
@@ -830,7 +831,7 @@ class MainWindow(QMainWindow):
 def main():
     load_env()
     setup_logging()
-    logger.info("Finance AI запуск")
+    logger.info("Finance AI запуск, версия %s", __version__)
     app = QApplication([])
     conn = db.get_connection()
     db.init_db(conn)

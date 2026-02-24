@@ -5,6 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
+from version import __version__
+
 LOG_DIR = Path(r"Q:\bank_analyzer") if Path(r"Q:\bank_analyzer").exists() else Path.home() / ".bank_analyzer"
 LOG_FILE = LOG_DIR / "finance_ai.log"
 _actual_log_file: Path | None = None
@@ -23,7 +25,7 @@ def setup_logging(level: int = logging.DEBUG) -> None:
     _actual_log_file = log_path
 
     formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        f"%(asctime)s [%(levelname)s] v{__version__} %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

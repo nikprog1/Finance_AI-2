@@ -23,6 +23,9 @@ Compression=lzma
 SolidCompression=yes
 DisableDirPage=no
 DisableProgramGroupPage=no
+; Имя в «Программы и компоненты» для удаления
+UninstallDisplayName={#MyAppName} {#MyAppVersion}
+UninstallDisplayIcon={app}\\{#MyAppExeName}
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\\Russian.isl"
@@ -46,3 +49,8 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 ; Автоматический запуск программы после установки (опционально)
 Filename: "{app}\\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
+; --- Uninstall ---
+; При удалении программы через «Удалить Finance AI» или «Программы и компоненты»
+; удаляются файлы приложения и каталог установки.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}"

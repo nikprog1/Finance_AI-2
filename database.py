@@ -83,10 +83,16 @@ CREATE TABLE IF NOT EXISTS settings (
 def init_db(conn: sqlite3.Connection) -> None:
     """Создание всех таблиц при отсутствии."""
     conn.execute(CREATE_TABLE_SQL)
-    try:
-        conn.execute("ALTER TABLE transactions ADD COLUMN card_number TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col, default in [
+        ("card_number", "TEXT"),
+        ("bonuses", "REAL DEFAULT 0"),
+        ("rounding_invest", "REAL DEFAULT 0"),
+        ("amount_with_rounding", "REAL DEFAULT 0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} {default}")
+        except sqlite3.OperationalError:
+            pass
     conn.execute(CREATE_GOALS_TABLE_SQL)
     conn.execute(CREATE_CARD_ACCOUNTS_TABLE_SQL)
     conn.execute(CREATE_MODELS_TABLE_SQL)
@@ -112,11 +118,11 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 def insert_transactions(
     conn: sqlite3.Connection,
-    rows: list[tuple[str, str, float, str, str]],
+    rows: list[tuple],
 ) -> None:
-    """Вставка списка транзакций (date, description, amount, category, card_number)."""
+    """Вставка списка транзакций: (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding)."""
     conn.executemany(
-        "INSERT INTO transactions (date, description, amount, category, card_number) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -137,6 +143,9 @@ def update_transaction(
     amount: Optional[float] = None,
     category: Optional[str] = None,
     card_number: Optional[str] = None,
+    bonuses: Optional[float] = None,
+    rounding_invest: Optional[float] = None,
+    amount_with_rounding: Optional[float] = None,
 ) -> bool:
     """Обновление транзакции. Возвращает True при успехе."""
     updates: list[tuple[str, Any]] = []
@@ -150,6 +159,12 @@ def update_transaction(
         updates.append(("category", category))
     if card_number is not None:
         updates.append(("card_number", card_number))
+    if bonuses is not None:
+        updates.append(("bonuses", bonuses))
+    if rounding_invest is not None:
+        updates.append(("rounding_invest", rounding_invest))
+    if amount_with_rounding is not None:
+        updates.append(("amount_with_rounding", amount_with_rounding))
     if not updates:
         return True
     set_clause = ", ".join(f"{k} = ?" for k, _ in updates)
@@ -166,6 +181,13 @@ def delete_transaction(conn: sqlite3.Connection, id: int) -> bool:
     return cur.rowcount > 0
 
 
+def delete_all_transactions(conn: sqlite3.Connection) -> int:
+    """Удаляет все записи из таблицы transactions. Только для отладки. Возвращает количество удалённых."""
+    cur = conn.execute("DELETE FROM transactions")
+    conn.commit()
+    return cur.rowcount
+
+
 def insert_transaction(
     conn: sqlite3.Connection,
     date: str,
@@ -173,11 +195,14 @@ def insert_transaction(
     amount: float,
     category: str = "Без категории",
     card_number: str = "",
+    bonuses: float = 0,
+    rounding_invest: float = 0,
+    amount_with_rounding: float = 0,
 ) -> int:
     """Вставка одной транзакции. Возвращает id."""
     cur = conn.execute(
-        "INSERT INTO transactions (date, description, amount, category, card_number) VALUES (?, ?, ?, ?, ?)",
-        (date, description, amount, category, card_number or None),
+        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (date, description, amount, category, card_number or None, bonuses, rounding_invest, amount_with_rounding),
     )
     conn.commit()
     return cur.lastrowid
@@ -232,16 +257,16 @@ def search_transactions(
             params.extend([pattern, pattern, pattern, pattern])
     where = " AND ".join(conditions) if conditions else "1=1"
     cur = conn.execute(
-        f"SELECT id, date, description, amount, category, card_number FROM transactions WHERE {where} ORDER BY date DESC, id DESC",
+        f"SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions WHERE {where} ORDER BY date DESC, id DESC",
         params,
     )
     return [dict(row) for row in cur.fetchall()]
 
 
 def get_all_transactions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Выборка для таблицы: id, date, description, amount, category, card_number."""
+    """Выборка для таблицы: id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding."""
     cur = conn.execute(
-        "SELECT id, date, description, amount, category, card_number FROM transactions ORDER BY date DESC, id DESC"
+        "SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions ORDER BY date DESC, id DESC"
     )
     return [dict(row) for row in cur.fetchall()]
 
@@ -255,9 +280,9 @@ def get_existing_keys(conn: sqlite3.Connection) -> set[tuple[str, str, float]]:
 
 
 def get_existing_by_key(conn: sqlite3.Connection) -> dict[tuple[str, str, float], dict]:
-    """Для каждого ключа (date, description, amount) возвращает {id, category, card_number}."""
+    """Для каждого ключа (date, description, amount) возвращает {id, category, card_number, bonuses, rounding_invest, amount_with_rounding}."""
     cur = conn.execute(
-        "SELECT id, date, description, amount, category, card_number FROM transactions"
+        "SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions"
     )
     result = {}
     for row in cur.fetchall():
@@ -267,9 +292,9 @@ def get_existing_by_key(conn: sqlite3.Connection) -> dict[tuple[str, str, float]
 
 
 def get_existing_by_datetime(conn: sqlite3.Connection) -> dict[str, list[dict]]:
-    """Индекс по дате+времени: date_str -> список [{id, description, amount, category, card_number}]."""
+    """Индекс по дате+времени: date_str -> список [{id, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding}]."""
     cur = conn.execute(
-        "SELECT id, date, description, amount, category, card_number FROM transactions"
+        "SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions"
     )
     result: dict[str, list] = {}
     for row in cur.fetchall():
@@ -280,6 +305,9 @@ def get_existing_by_datetime(conn: sqlite3.Connection) -> dict[str, list[dict]]:
             "amount": row[3],
             "category": (row[4] or "Без категории").strip(),
             "card_number": (row[5] or "").strip(),
+            "bonuses": row[6] if len(row) > 6 else 0,
+            "rounding_invest": row[7] if len(row) > 7 else 0,
+            "amount_with_rounding": row[8] if len(row) > 8 else 0,
         }
         result.setdefault(dt, []).append(entry)
     return result

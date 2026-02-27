@@ -169,7 +169,10 @@ class MainWindow(QMainWindow):
         table_and_panel = QHBoxLayout()
         table_main.addLayout(table_and_panel)
         self.model = QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Дата", "Номер карты", "Описание", "Сумма", "Категория"])
+        self.model.setHorizontalHeaderLabels([
+            "Дата", "Номер карты", "Описание", "Сумма", "Категория",
+            "Бонусы (включая кэшбэк)", "Округление на инвесткопилку", "Сумма операции с округлением",
+        ])
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
@@ -332,6 +335,9 @@ class MainWindow(QMainWindow):
         dedup_btn = QPushButton("Удалить дубликаты транзакций")
         dedup_btn.clicked.connect(self._on_dedup)
         settings_layout.addWidget(dedup_btn)
+        del_all_btn = QPushButton("Удалить все (только для отладки)")
+        del_all_btn.clicked.connect(self._on_delete_all)
+        settings_layout.addWidget(del_all_btn)
         settings_layout.addStretch()
         self.tabs.addTab(self.settings_tab, "Настройки")
 
@@ -398,12 +404,18 @@ class MainWindow(QMainWindow):
             id_item.setData(row["id"], Qt.UserRole)
             id_item.setEditable(False)
             card = (row.get("card_number") or "").strip()
+            bonuses = row.get("bonuses", 0) or 0
+            rounding = row.get("rounding_invest", 0) or 0
+            amt_round = row.get("amount_with_rounding", 0) or 0
             self.model.appendRow([
                 id_item,
                 QStandardItem(card),
                 QStandardItem(row["description"]),
                 QStandardItem(str(row["amount"])),
                 QStandardItem(row["category"] or "Без категории"),
+                QStandardItem(str(bonuses)),
+                QStandardItem(str(rounding)),
+                QStandardItem(str(amt_round)),
             ])
         for r in range(self.model.rowCount()):
             it0 = self.model.item(r, 0)
@@ -525,6 +537,21 @@ class MainWindow(QMainWindow):
                 return
         elif col == 4:
             kwargs["category"] = (self.model.data(top_left, Qt.EditRole) or "Без категории").strip()
+        elif col == 5:
+            try:
+                kwargs["bonuses"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
+            except (ValueError, TypeError):
+                return
+        elif col == 6:
+            try:
+                kwargs["rounding_invest"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
+            except (ValueError, TypeError):
+                return
+        elif col == 7:
+            try:
+                kwargs["amount_with_rounding"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
+            except (ValueError, TypeError):
+                return
         if kwargs and db.update_transaction(self._conn, row_id, **kwargs):
             self.statusBar().showMessage("Сохранено")
             self._refresh_recommendations()
@@ -706,6 +733,21 @@ class MainWindow(QMainWindow):
         self._reload_table()
         self._refresh_charts()
         self.statusBar().showMessage(f"Удалено дубликатов: {n}")
+
+    def _on_delete_all(self):
+        """Удалить все записи из БД. Только для отладки."""
+        if QMessageBox.question(
+            self, "Подтверждение",
+            "Удалить ВСЕ записи из базы данных? Это действие нельзя отменить.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        n = db.delete_all_transactions(self._conn)
+        self._refresh_filter_combos()
+        self._reload_table()
+        self._refresh_charts()
+        self._refresh_recommendations()
+        self.statusBar().showMessage(f"Удалено записей: {n}")
 
     def _load_overview(self):
         """Загрузить вкладку «Общее»: по категориям, по картам, по месяцам."""

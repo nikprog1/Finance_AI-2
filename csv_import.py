@@ -1,8 +1,9 @@
 """
 Импорт банковских выписок Тинькофф из CSV в БД.
-Формат образца: Дата операции, Дата платежа, Номер карты, Статус, Сумма операции,
-Валюта операции, ..., Категория, MCC, Описание, ...
-В БД идут: дата, описание (Описание), сумма (Сумма операции), категория (Категория или по умолчанию).
+Модуль только читает CSV, никогда не записывает в файлы. Изменения в БД не влияют на исходный CSV.
+Формат образца: Дата операции, Номер карты, Сумма операции, Категория, Описание,
+Бонусы (включая кэшбэк), Округление на инвесткопилку, Сумма операции с округлением...
+В БД идут: дата, описание, сумма, категория, card_number, bonuses, rounding_invest, amount_with_rounding.
 """
 import sqlite3
 from pathlib import Path
@@ -56,6 +57,15 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     card_col = _find_column(df, "Номер карты")
     if card_col:
         mapping[card_col] = "card_number"
+    bonuses_col = _find_column(df, "Бонусы (включая кэшбэк)")
+    if bonuses_col:
+        mapping[bonuses_col] = "bonuses"
+    rounding_col = _find_column(df, "Округление на инвесткопилку")
+    if rounding_col:
+        mapping[rounding_col] = "rounding_invest"
+    amt_round_col = _find_column(df, "Сумма операции с округлением")
+    if amt_round_col:
+        mapping[amt_round_col] = "amount_with_rounding"
     df = df.rename(columns=mapping)
     return df
 
@@ -91,6 +101,16 @@ def _parse_csv_rows(path: str | Path) -> list[tuple]:
     else:
         df["card_number"] = df["card_number"].fillna("").astype(str).str.strip()
 
+    def _safe_float_col(name: str) -> list:
+        if name not in df.columns:
+            return [0.0] * len(df)
+        s = df[name].astype(str).str.strip().str.replace(",", ".", regex=False)
+        return pd.to_numeric(s, errors="coerce").fillna(0.0).astype(float).tolist()
+
+    bonuses = _safe_float_col("bonuses")
+    rounding = _safe_float_col("rounding_invest")
+    amt_round = _safe_float_col("amount_with_rounding")
+
     return list(
         zip(
             df["date_iso"].tolist(),
@@ -98,6 +118,9 @@ def _parse_csv_rows(path: str | Path) -> list[tuple]:
             df["amount_float"].tolist(),
             df["category"].tolist(),
             df["card_number"].tolist(),
+            bonuses,
+            rounding,
+            amt_round,
         )
     )
 
@@ -156,6 +179,9 @@ def import_from_csv(conn: sqlite3.Connection, path: str | Path, overwrite_confli
         amt_csv = r[2]
         cat_csv = (r[3] or "Без категории").strip()
         card_csv = (r[4] or "").strip()
+        bonuses_csv = float(r[5]) if len(r) > 5 else 0.0
+        rounding_csv = float(r[6]) if len(r) > 6 else 0.0
+        amt_round_csv = float(r[7]) if len(r) > 7 else 0.0
         if date_iso not in existing:
             new_rows.append(r)
             continue
@@ -179,6 +205,9 @@ def import_from_csv(conn: sqlite3.Connection, path: str | Path, overwrite_confli
                     amount=float(amt_csv),
                     category=cat_csv,
                     card_number=card_csv,
+                    bonuses=bonuses_csv,
+                    rounding_invest=rounding_csv,
+                    amount_with_rounding=amt_round_csv,
                 )
                 updated += 1
             elif not differs and card_csv and not card_db:

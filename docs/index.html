@@ -7,51 +7,143 @@
   <style>
     * { box-sizing: border-box; }
     body {
-      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-      line-height: 1.6;
-      max-width: 640px;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      line-height: 1.65;
+      max-width: 720px;
       margin: 0 auto;
-      padding: 2rem 1rem;
-      color: #1a1a1a;
-      background: #fafafa;
+      padding: 3rem 1.5rem;
+      color: #24292f;
+      background: linear-gradient(160deg, #f6f8fa 0%, #eaeef2 100%);
+      min-height: 100vh;
     }
-    h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
-    .tagline { color: #555; font-size: 1rem; margin-bottom: 1.5rem; }
-    p { margin: 0 0 1rem; }
-    .actions { margin-top: 2rem; }
+    .hero {
+      text-align: center;
+      margin-bottom: 2.5rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 700;
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .tagline {
+      color: #57606a;
+      font-size: 1.125rem;
+      margin: 0;
+    }
+    .intro {
+      margin-bottom: 2rem;
+      padding: 1.25rem 1.5rem;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      border: 1px solid rgba(0,0,0,0.06);
+    }
+    .intro p {
+      margin: 0 0 0.75rem;
+    }
+    .intro p:last-child { margin-bottom: 0; }
+    .downloads {
+      margin: 2rem 0;
+    }
+    .downloads h2 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin: 0 0 1rem;
+      color: #24292f;
+    }
+    .download-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .download-card {
+      display: block;
+      padding: 1rem 1.25rem;
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid rgba(0,0,0,0.08);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .download-card:hover {
+      border-color: #238636;
+      box-shadow: 0 4px 12px rgba(35, 134, 54, 0.15);
+    }
+    .download-card .title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 0.25rem;
+    }
+    .download-card .desc {
+      font-size: 0.8rem;
+      color: #57606a;
+    }
+    .download-card.primary {
+      background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+      color: #fff;
+      border: none;
+    }
+    .download-card.primary .desc { color: rgba(255,255,255,0.9); }
+    .download-card.primary:hover { box-shadow: 0 4px 16px rgba(35, 134, 54, 0.35); }
+    .actions {
+      margin-top: 2rem;
+    }
     .btn {
       display: inline-block;
       padding: 0.6rem 1.2rem;
-      background: #238636;
+      background: #424242;
       color: #fff;
       text-decoration: none;
-      border-radius: 6px;
+      border-radius: 8px;
       font-weight: 600;
-      margin-right: 0.75rem;
-      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
     }
-    .btn:hover { background: #2ea043; }
-    .btn.secondary { background: #424242; }
-    .btn.secondary:hover { background: #555; }
-    .version { font-size: 0.875rem; color: #666; margin-top: 2rem; }
+    .btn:hover { background: #555; }
+    .footer {
+      margin-top: 2.5rem;
+      font-size: 0.875rem;
+      color: #57606a;
+    }
   </style>
 </head>
 <body>
-  <h1>Finance AI</h1>
-  <p class="tagline">Анализ банковских выписок и советы по целям</p>
-
-  <p>
-    Десктопное приложение для учёта транзакций: импорт CSV-выписок Тинькофф, хранение в SQLite,
-    отчёты по категориям и картам, финансовые цели с прогрессом и рекомендации по сокращению расходов
-    с помощью облачного ИИ (OpenRouter / OpenAI-совместимый API).
-  </p>
-
-  <div class="actions">
-    <!-- Замените nikprog1/Finance_AI-2 на свой репозиторий -->
-    <a class="btn" href="https://github.com/nikprog1/Finance_AI-2/releases/latest">Скачать последнюю версию (Windows)</a>
-    <a class="btn secondary" href="https://github.com/nikprog1/Finance_AI-2">Исходный код на GitHub</a>
+  <div class="hero">
+    <h1>Finance AI</h1>
+    <p class="tagline">Анализ банковских выписок и советы по целям</p>
   </div>
 
-  <p class="version">Версия 1.0.0</p>
+  <div class="intro">
+    <p>
+      Десктопное приложение для учёта транзакций: импорт CSV-выписок Тинькофф, хранение в SQLite,
+      отчёты по категориям и картам, финансовые цели с прогрессом и рекомендации по сокращению расходов
+      с помощью облачного ИИ (OpenRouter / OpenAI-совместимый API).
+    </p>
+  </div>
+
+  <section class="downloads">
+    <h2>Скачать (Windows)</h2>
+    <div class="download-grid">
+      <!-- Прямые ссылки на артефакты релиза. Замените nikprog1/Finance_AI-2 и v1.0.0 на свои. -->
+      <a class="download-card primary" href="https://github.com/nikprog1/Finance_AI-2/releases/download/v1.0.0/Finance_AI_1.0.0_Setup.exe" download="Finance_AI_1.0.0_Setup.exe">
+        <span class="title">Finance_AI_1.0.0_Setup.exe</span>
+        <span class="desc">Установщик (рекомендуется)</span>
+      </a>
+      <a class="download-card" href="https://github.com/nikprog1/Finance_AI-2/releases/download/v1.0.0/Finance_AI_1.0.0.exe" download="Finance_AI_1.0.0.exe">
+        <span class="title">Finance_AI_1.0.0.exe</span>
+        <span class="desc">Портативный exe без установки</span>
+      </a>
+    </div>
+  </section>
+
+  <div class="actions">
+    <a class="btn" href="https://github.com/nikprog1/Finance_AI-2">Исходный код на GitHub</a>
+  </div>
+
+  <p class="footer">Версия 1.0.0</p>
 </body>
 </html>

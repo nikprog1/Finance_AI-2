@@ -3,6 +3,14 @@
 
 import runpy
 
+try:
+    from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+    _mpl_imports = collect_submodules("matplotlib")
+    _mpl_datas = collect_data_files("matplotlib")
+except ImportError:
+    _mpl_imports = ["matplotlib", "matplotlib.backends.backend_qt5agg", "matplotlib.figure"]
+    _mpl_datas = []
+
 # Спек-файл выполняется из корня проекта, поэтому version.py доступен по относительному пути
 _ver_ns = runpy.run_path("version.py")
 _app_version = _ver_ns.get("__version__", "0.0.0")
@@ -12,7 +20,7 @@ a = Analysis(
     scripts=["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=_mpl_datas,
     hiddenimports=[
         "database",
         "csv_import",
@@ -24,9 +32,7 @@ a = Analysis(
         "transaction_dialog",
         "goal_dialog",
         "agent_rules",
-        "matplotlib",
-        "matplotlib.backends.backend_qt5agg",
-    ],
+    ] + _mpl_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

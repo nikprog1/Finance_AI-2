@@ -783,6 +783,7 @@ class MainWindow(QMainWindow):
             cat_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
             cat_table.setItem(i, 3, QTableWidgetItem(pct_inc))
             cat_table.setItem(i, 4, QTableWidgetItem(pct_exp))
+        cat_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         cat_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.overview_content_layout.addWidget(cat_table)
         self.overview_content_layout.addSpacing(16)
@@ -816,6 +817,7 @@ class MainWindow(QMainWindow):
             card_table.setItem(i, 3, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
             card_table.setItem(i, 4, QTableWidgetItem(pct_inc))
             card_table.setItem(i, 5, QTableWidgetItem(pct_exp))
+        card_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         card_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.overview_content_layout.addWidget(card_table)
         self.overview_content_layout.addSpacing(16)
@@ -841,6 +843,7 @@ class MainWindow(QMainWindow):
                     month_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
                     month_table.setItem(i, 3, QTableWidgetItem(f"{bal:,.0f}".replace(",", " ")))
                     month_table.setItem(i, 4, QTableWidgetItem(f"{pct:.1f}%"))
+                month_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
                 month_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
                 self.overview_content_layout.addWidget(month_table)
 

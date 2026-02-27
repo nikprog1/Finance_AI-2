@@ -1,5 +1,6 @@
-; Inno Setup script for Finance AI 1.0.0
+; Inno Setup script for Finance AI
 ; Откройте этот файл в Inno Setup и нажмите Build
+; Версию берите из version.py — обновите MyAppVersion и MyAppExeName при смене версии
 
 ; --- Базовые параметры приложения ---
 
@@ -8,7 +9,7 @@
 #define MyAppPublisher "Finance AI"
 #define MyAppExeName "Finance_AI_1.0.0.exe"
 
-; PyInstaller собрал one-file exe в папку dist
+; PyInstaller one-file exe в dist\Finance_AI_<версия>.exe (один файл, без папки)
 #define MyAppSourceDir "dist"
 
 [Setup]

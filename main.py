@@ -335,9 +335,6 @@ class MainWindow(QMainWindow):
         dedup_btn = QPushButton("Удалить дубликаты транзакций")
         dedup_btn.clicked.connect(self._on_dedup)
         settings_layout.addWidget(dedup_btn)
-        del_all_btn = QPushButton("Удалить все (только для отладки)")
-        del_all_btn.clicked.connect(self._on_delete_all)
-        settings_layout.addWidget(del_all_btn)
         settings_layout.addStretch()
         self.tabs.addTab(self.settings_tab, "Настройки")
 
@@ -733,21 +730,6 @@ class MainWindow(QMainWindow):
         self._reload_table()
         self._refresh_charts()
         self.statusBar().showMessage(f"Удалено дубликатов: {n}")
-
-    def _on_delete_all(self):
-        """Удалить все записи из БД. Только для отладки."""
-        if QMessageBox.question(
-            self, "Подтверждение",
-            "Удалить ВСЕ записи из базы данных? Это действие нельзя отменить.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        ) != QMessageBox.Yes:
-            return
-        n = db.delete_all_transactions(self._conn)
-        self._refresh_filter_combos()
-        self._reload_table()
-        self._refresh_charts()
-        self._refresh_recommendations()
-        self.statusBar().showMessage(f"Удалено записей: {n}")
 
     def _load_overview(self):
         """Загрузить вкладку «Общее»: по категориям, по картам, по месяцам."""

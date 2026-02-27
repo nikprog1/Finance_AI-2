@@ -4,6 +4,21 @@
 
 ---
 
+## 0. Оставшиеся шаги (кратко)
+
+После подготовки файлов выполните вручную:
+
+1. **Сборка:** `pip install -r requirements.txt`, затем `pyinstaller --clean Finance_AI.spec`
+2. **Inno Setup:** откройте `Finance_AI_Setup.iss` → Build → Compile
+3. **Git:** `git add .`, `git commit`, `git push`
+4. **Тег:** `git tag v1.0.0`, `git push origin v1.0.0`
+5. **Release:** GitHub → Releases → Create release → прикрепите `Finance_AI_1.0.0_Setup.exe`
+6. **Pages:** Settings → Pages → Branch: main, Folder: /docs → Save
+
+Подробности ниже.
+
+---
+
 ## 1. Подготовка к релизу
 
 1. **Обновите версию** в корне проекта в файле `version.py`:

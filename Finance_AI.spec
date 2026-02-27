@@ -24,6 +24,8 @@ a = Analysis(
         "transaction_dialog",
         "goal_dialog",
         "agent_rules",
+        "matplotlib",
+        "matplotlib.backends.backend_qt5agg",
     ],
     hookspath=[],
     hooksconfig={},

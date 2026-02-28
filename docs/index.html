@@ -19,61 +19,110 @@
       line-height: 1.65;
       max-width: 720px;
       margin: 0 auto;
-      padding: 3rem 1.5rem;
+      padding: 1rem;
       color: var(--octocat-white);
       background: var(--octocat-black);
       min-height: 100vh;
     }
+    @media (min-width: 480px) {
+      body { padding: 2rem 1.5rem; }
+    }
+    @media (min-width: 640px) {
+      body { padding: 3rem 1.5rem; }
+    }
     .hero {
       text-align: center;
-      margin-bottom: 2.5rem;
-      padding-bottom: 2rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
       border-bottom: 1px solid var(--octocat-gray);
     }
+    .hero-title {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .octocat-icon {
+      width: 2rem;
+      height: 2rem;
+      color: var(--octocat-purple);
+      flex-shrink: 0;
+    }
     h1 {
-      font-size: 2.25rem;
+      font-size: 1.75rem;
       font-weight: 700;
-      margin: 0 0 0.5rem;
+      margin: 0;
       letter-spacing: -0.02em;
       color: var(--octocat-white);
     }
+    @media (min-width: 480px) {
+      h1 { font-size: 2rem; }
+      .octocat-icon { width: 2.25rem; height: 2.25rem; }
+    }
+    @media (min-width: 640px) {
+      h1 { font-size: 2.25rem; }
+      .octocat-icon { width: 2.5rem; height: 2.5rem; }
+    }
     .tagline {
       color: var(--octocat-gray-text);
-      font-size: 1.125rem;
-      margin: 0;
+      font-size: 1rem;
+      margin: 0.5rem 0 0;
+    }
+    @media (min-width: 480px) {
+      .tagline { font-size: 1.125rem; }
     }
     .intro {
-      margin-bottom: 2rem;
-      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.25rem;
       background: var(--octocat-gray);
-      border-radius: 12px;
+      border-radius: 8px;
       border: 1px solid var(--octocat-purple);
+    }
+    @media (min-width: 480px) {
+      .intro { padding: 1.25rem 1.5rem; margin-bottom: 2rem; }
     }
     .intro p {
       margin: 0 0 0.75rem;
       color: var(--octocat-white);
+      font-size: 0.9375rem;
+    }
+    @media (min-width: 480px) {
+      .intro p { font-size: 1rem; }
     }
     .intro p:last-child { margin-bottom: 0; }
     .downloads {
-      margin: 2rem 0;
+      margin: 1.5rem 0;
+    }
+    @media (min-width: 480px) {
+      .downloads { margin: 2rem 0; }
     }
     .downloads h2 {
-      font-size: 1.125rem;
+      font-size: 1rem;
       font-weight: 600;
-      margin: 0 0 1rem;
+      margin: 0 0 0.75rem;
       color: var(--octocat-white);
+    }
+    @media (min-width: 480px) {
+      .downloads h2 { font-size: 1.125rem; margin-bottom: 1rem; }
     }
     .download-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 1rem;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+    }
+    @media (min-width: 480px) {
+      .download-grid {
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 1rem;
+      }
     }
     .download-card {
       display: block;
       padding: 1rem 1.25rem;
       background: var(--octocat-orange);
       color: var(--octocat-white);
-      border-radius: 10px;
+      border-radius: 8px;
       border: none;
       box-shadow: 0 1px 2px rgba(0,0,0,0.2);
       text-decoration: none;
@@ -85,15 +134,24 @@
     }
     .download-card .title {
       font-weight: 600;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       margin-bottom: 0.25rem;
     }
+    @media (min-width: 480px) {
+      .download-card .title { font-size: 0.95rem; }
+    }
     .download-card .desc {
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       color: rgba(255,255,255,0.9);
     }
+    @media (min-width: 480px) {
+      .download-card .desc { font-size: 0.8rem; }
+    }
     .actions {
-      margin-top: 2rem;
+      margin-top: 1.5rem;
+    }
+    @media (min-width: 480px) {
+      .actions { margin-top: 2rem; }
     }
     .btn {
       display: inline-block;
@@ -107,15 +165,23 @@
     }
     .btn:hover { opacity: 0.95; }
     .footer {
-      margin-top: 2.5rem;
-      font-size: 0.875rem;
+      margin-top: 2rem;
+      font-size: 0.8125rem;
       color: var(--octocat-gray-text);
+    }
+    @media (min-width: 480px) {
+      .footer { margin-top: 2.5rem; font-size: 0.875rem; }
     }
   </style>
 </head>
 <body>
   <div class="hero">
-    <h1>Finance AI</h1>
+    <div class="hero-title">
+      <svg class="octocat-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <h1>Finance AI</h1>
+    </div>
     <p class="tagline">Анализ банковских выписок и советы по целям</p>
   </div>
 
@@ -130,7 +196,6 @@
   <section class="downloads">
     <h2>Скачать (Windows)</h2>
     <div class="download-grid">
-      <!-- Прямые ссылки на артефакты релиза. Замените nikprog1/Finance_AI-2 и v1.0.0 на свои. -->
       <a class="download-card" href="https://github.com/nikprog1/Finance_AI-2/releases/download/V1.0.0/Finance_AI_1.0.0_Setup.exe" download="Finance_AI_1.0.0_Setup.exe">
         <span class="title">Finance_AI_1.0.0_Setup.exe</span>
         <span class="desc">Установщик (рекомендуется)</span>

@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Finance AI — анализ выписок и финансовые цели</title>
   <style>
+    :root {
+      --octocat-black: #0d1117;
+      --octocat-gray: #161b22;
+      --octocat-purple: #8957e5;
+      --octocat-orange: #f78166;
+      --octocat-white: #ffffff;
+      --octocat-gray-text: #8b949e;
+    }
     * { box-sizing: border-box; }
     body {
       font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -12,37 +20,38 @@
       max-width: 720px;
       margin: 0 auto;
       padding: 3rem 1.5rem;
-      color: #24292f;
-      background: #f0f2f5;
+      color: var(--octocat-white);
+      background: var(--octocat-black);
       min-height: 100vh;
     }
     .hero {
       text-align: center;
       margin-bottom: 2.5rem;
       padding-bottom: 2rem;
-      border-bottom: 1px solid rgba(0,0,0,0.08);
+      border-bottom: 1px solid var(--octocat-gray);
     }
     h1 {
       font-size: 2.25rem;
       font-weight: 700;
       margin: 0 0 0.5rem;
       letter-spacing: -0.02em;
+      color: var(--octocat-white);
     }
     .tagline {
-      color: #57606a;
+      color: var(--octocat-gray-text);
       font-size: 1.125rem;
       margin: 0;
     }
     .intro {
       margin-bottom: 2rem;
       padding: 1.25rem 1.5rem;
-      background: #fff;
+      background: var(--octocat-gray);
       border-radius: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-      border: 1px solid rgba(0,0,0,0.06);
+      border: 1px solid var(--octocat-purple);
     }
     .intro p {
       margin: 0 0 0.75rem;
+      color: var(--octocat-white);
     }
     .intro p:last-child { margin-bottom: 0; }
     .downloads {
@@ -52,7 +61,7 @@
       font-size: 1.125rem;
       font-weight: 600;
       margin: 0 0 1rem;
-      color: #24292f;
+      color: var(--octocat-white);
     }
     .download-grid {
       display: grid;
@@ -62,17 +71,17 @@
     .download-card {
       display: block;
       padding: 1rem 1.25rem;
-      background: #238636;
-      color: #fff;
+      background: var(--octocat-orange);
+      color: var(--octocat-white);
       border-radius: 10px;
       border: none;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
       text-decoration: none;
       transition: opacity 0.2s, box-shadow 0.2s;
     }
     .download-card:hover {
       opacity: 0.95;
-      box-shadow: 0 4px 12px rgba(35, 134, 54, 0.3);
+      box-shadow: 0 4px 12px rgba(247, 129, 102, 0.4);
     }
     .download-card .title {
       font-weight: 600;
@@ -89,8 +98,8 @@
     .btn {
       display: inline-block;
       padding: 0.6rem 1.2rem;
-      background: #238636;
-      color: #fff;
+      background: var(--octocat-orange);
+      color: var(--octocat-white);
       text-decoration: none;
       border-radius: 8px;
       font-weight: 600;
@@ -100,7 +109,7 @@
     .footer {
       margin-top: 2.5rem;
       font-size: 0.875rem;
-      color: #57606a;
+      color: var(--octocat-gray-text);
     }
   </style>
 </head>

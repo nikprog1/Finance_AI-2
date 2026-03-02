@@ -80,6 +80,23 @@ class GoalWorker(QObject):
             self.finished.emit((self.rule_text, False))
 
 
+class AccountTypeDelegate(QStyledItemDelegate):
+    """Делегат: при редактировании ячейки «Тип счёта» показывается QComboBox с «желтый», «зеленый»."""
+
+    def createEditor(self, parent, option, index):
+        editor = QComboBox(parent)
+        editor.addItems(db.ACCOUNT_TYPES_TRANSACTIONS)
+        return editor
+
+    def setEditorData(self, editor: QComboBox, index):
+        value = index.model().data(index, Qt.EditRole)
+        i = editor.findText(value if value else "желтый")
+        editor.setCurrentIndex(max(0, i))
+
+    def setModelData(self, editor: QComboBox, model, index):
+        model.setData(index, editor.currentText(), Qt.EditRole)
+
+
 class CategoryDelegate(QStyledItemDelegate):
     """Делегат: при редактировании ячейки «Категория» показывается QComboBox с фиксированным списком."""
 
@@ -158,9 +175,6 @@ class MainWindow(QMainWindow):
         search_btn = QPushButton("Поиск")
         search_btn.clicked.connect(self._on_search)
         filter_row.addWidget(search_btn)
-        edit_btn = QPushButton("Редактировать")
-        edit_btn.clicked.connect(self._on_edit_transaction_focus)
-        filter_row.addWidget(edit_btn)
         del_btn = QPushButton("Удалить")
         del_btn.clicked.connect(self._on_delete_transaction)
         filter_row.addWidget(del_btn)
@@ -171,12 +185,13 @@ class MainWindow(QMainWindow):
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels([
             "Дата", "Номер карты", "Описание", "Сумма", "Категория",
-            "Бонусы (включая кэшбэк)", "Округление на инвесткопилку", "Сумма операции с округлением",
+            "Бонусы (включая кэшбэк)", "Округление на инвесткопилку", "Тип счёта",
         ])
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
-        self.table.setItemDelegateForColumn(4, CategoryDelegate(self))
+        # Колонка «Категория» редактируется как обычный текст (без выпадающего списка)
+        self.table.setItemDelegateForColumn(7, AccountTypeDelegate())
         self.model.dataChanged.connect(self._on_transaction_data_changed)
         table_and_panel.addWidget(self.table, 1)
 
@@ -406,7 +421,7 @@ class MainWindow(QMainWindow):
             card = (row.get("card_number") or "").strip()
             bonuses = row.get("bonuses", 0) or 0
             rounding = row.get("rounding_invest", 0) or 0
-            amt_round = row.get("amount_with_rounding", 0) or 0
+            acc_type = (row.get("account_type") or "желтый").strip() or "желтый"
             self.model.appendRow([
                 id_item,
                 QStandardItem(card),
@@ -415,12 +430,18 @@ class MainWindow(QMainWindow):
                 QStandardItem(row["category"] or "Без категории"),
                 QStandardItem(str(bonuses)),
                 QStandardItem(str(rounding)),
-                QStandardItem(str(amt_round)),
+                QStandardItem(str(acc_type)),
             ])
         for r in range(self.model.rowCount()):
-            it0 = self.model.item(r, 0)
-            if it0:
-                it0.setEditable(False)  # Дата — только чтение
+            for c in range(8):
+                it = self.model.item(r, c)
+                if not it:
+                    continue
+                # Разрешаем редактировать только Описание, Категорию и Тип счёта
+                if c in (2, 4, 7):
+                    it.setEditable(True)
+                else:
+                    it.setEditable(False)
         self._refresh_recommendations()
 
     def _refresh_recommendations(self):
@@ -501,22 +522,14 @@ class MainWindow(QMainWindow):
         self._last_goal_result = (text or "", from_ai)
         self._refresh_recommendations()
 
-    def _on_edit_transaction_focus(self):
-        """Фокус на таблице для inline-редактирования."""
-        self.table.setFocus()
-        idx = self.table.currentIndex()
-        if not idx.isValid() and self.model.rowCount() > 0:
-            self.table.selectRow(0)
-        self.statusBar().showMessage("Дважды щёлкните по ячейке для редактирования")
-
     def _on_transaction_data_changed(self, top_left, bottom_right, roles):
-        """Auto-save при изменении данных (кроме даты)."""
+        """Auto-save при изменении описания, категории или типа счёта."""
         if Qt.EditRole not in roles:
             return
-        row = top_left.row()
         col = top_left.column()
-        if col == 0:
-            return  # Дата — только чтение
+        if col not in (2, 4, 7):
+            return
+        row = top_left.row()
         id_index = self.model.index(row, 0)
         row_id = self.model.data(id_index, Qt.UserRole)
         if row_id is None:
@@ -526,32 +539,21 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             return
         kwargs = {}
-        if col == 1:
-            kwargs["card_number"] = (self.model.data(top_left, Qt.EditRole) or "").strip()
-        elif col == 2:
-            kwargs["description"] = (self.model.data(top_left, Qt.EditRole) or "").strip()
-        elif col == 3:
-            try:
-                kwargs["amount"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
-            except (ValueError, TypeError):
-                return
+        if col == 2:
+            desc = (self.model.data(top_left, Qt.EditRole) or "").strip()
+            if not desc:
+                desc = "—"
+            kwargs["description"] = desc
         elif col == 4:
-            kwargs["category"] = (self.model.data(top_left, Qt.EditRole) or "Без категории").strip()
-        elif col == 5:
-            try:
-                kwargs["bonuses"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
-            except (ValueError, TypeError):
-                return
-        elif col == 6:
-            try:
-                kwargs["rounding_invest"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
-            except (ValueError, TypeError):
-                return
+            cat = (self.model.data(top_left, Qt.EditRole) or "Без категории").strip()
+            if not cat:
+                cat = "Без категории"
+            kwargs["category"] = cat
         elif col == 7:
-            try:
-                kwargs["amount_with_rounding"] = float(str(self.model.data(top_left, Qt.EditRole)).replace(",", "."))
-            except (ValueError, TypeError):
+            account_type = (self.model.data(top_left, Qt.EditRole) or "желтый").strip()
+            if account_type not in db.ACCOUNT_TYPES_TRANSACTIONS:
                 return
+            kwargs["account_type"] = account_type
         if kwargs and db.update_transaction(self._conn, row_id, **kwargs):
             self.statusBar().showMessage("Сохранено")
             self._refresh_recommendations()
@@ -787,39 +789,29 @@ class MainWindow(QMainWindow):
         cat_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.overview_content_layout.addWidget(cat_table)
         self.overview_content_layout.addSpacing(16)
-        # По картам
-        card_data = db.get_income_expenses_by_card(self._conn, date_from, date_to)
-        card_label = QLabel("По картам")
-        card_label.setFont(QFont(card_label.font().family(), 10, QFont.Bold))
-        self.overview_content_layout.addWidget(card_label)
-        card_table = QTableWidget()
-        card_table.setColumnCount(6)
-        card_table.setHorizontalHeaderLabels(["Карта", "Тип счёта", "Доходы", "Расходы", "% доходов", "% расходов"])
-        card_table.setRowCount(len(card_data))
-        for i, r in enumerate(card_data):
-            card = str(r["card"])
+        # Тип счёта (агрегация по значению из транзакций)
+        acc_data = db.get_income_expenses_by_account_type(self._conn, date_from, date_to)
+        acc_label = QLabel("Тип счёта")
+        acc_label.setFont(QFont(acc_label.font().family(), 10, QFont.Bold))
+        self.overview_content_layout.addWidget(acc_label)
+        acc_table = QTableWidget()
+        acc_table.setColumnCount(5)
+        acc_table.setHorizontalHeaderLabels(["Тип счёта", "Доходы", "Расходы", "% доходов", "% расходов"])
+        acc_table.setRowCount(len(acc_data))
+        for i, r in enumerate(acc_data):
+            acc_type = str(r["account_type"])
             inc = float(r["income"])
             exp = float(r["expenses"])
             pct_inc = f"{inc / total_income * 100:.1f}%" if total_income else "—"
             pct_exp = f"{exp / total_exp * 100:.1f}%" if total_exp else "—"
-            card_table.setItem(i, 0, QTableWidgetItem(card))
-            acc_combo = QComboBox()
-            acc_combo.addItems(db.ACCOUNT_TYPES)
-            current_type = db.get_card_account_type(self._conn, card)
-            idx = acc_combo.findText(current_type)
-            if idx >= 0:
-                acc_combo.setCurrentIndex(idx)
-            acc_combo.currentTextChanged.connect(
-                lambda t, c=card: self._on_card_account_type_changed(c, t)
-            )
-            card_table.setCellWidget(i, 1, acc_combo)
-            card_table.setItem(i, 2, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
-            card_table.setItem(i, 3, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
-            card_table.setItem(i, 4, QTableWidgetItem(pct_inc))
-            card_table.setItem(i, 5, QTableWidgetItem(pct_exp))
-        card_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        card_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.overview_content_layout.addWidget(card_table)
+            acc_table.setItem(i, 0, QTableWidgetItem(acc_type))
+            acc_table.setItem(i, 1, QTableWidgetItem(f"{inc:,.0f}".replace(",", " ")))
+            acc_table.setItem(i, 2, QTableWidgetItem(f"{exp:,.0f}".replace(",", " ")))
+            acc_table.setItem(i, 3, QTableWidgetItem(pct_inc))
+            acc_table.setItem(i, 4, QTableWidgetItem(pct_exp))
+        acc_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        acc_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.overview_content_layout.addWidget(acc_table)
         self.overview_content_layout.addSpacing(16)
         # По месяцам (если год)
         if year_val is not None:
@@ -846,6 +838,31 @@ class MainWindow(QMainWindow):
                 month_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
                 month_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
                 self.overview_content_layout.addWidget(month_table)
+        # Накопления (таблица внизу вкладки)
+        savings = db.get_savings_amounts(self._conn, date_from, date_to)
+        sav_label = QLabel("Накопления")
+        sav_label.setFont(QFont(sav_label.font().family(), 10, QFont.Bold))
+        self.overview_content_layout.addWidget(sav_label)
+        savings_table = QTableWidget()
+        savings_table.setColumnCount(3)
+        savings_table.setHorizontalHeaderLabels(["Тип накопления", "Сумма", "Доля от всех расходов"])
+        savings_table.setRowCount(2)
+        # Накопление 1
+        inc1 = float(savings.get("investkopilka", 0.0) or 0.0)
+        pct1 = f"{inc1 / total_exp * 100:.1f}%" if total_exp else "—"
+        savings_table.setItem(0, 0, QTableWidgetItem("Регулярный перевод в Инвесткопилку"))
+        savings_table.setItem(0, 1, QTableWidgetItem(f"{inc1:,.0f}".replace(",", " ")))
+        savings_table.setItem(0, 2, QTableWidgetItem(pct1))
+        # Накопление 2
+        inc2 = float(savings.get("roundings", 0.0) or 0.0)
+        pct2 = f"{inc2 / total_exp * 100:.1f}%" if total_exp else "—"
+        savings_table.setItem(1, 0, QTableWidgetItem("Перевод округлений"))
+        savings_table.setItem(1, 1, QTableWidgetItem(f"{inc2:,.0f}".replace(",", " ")))
+        savings_table.setItem(1, 2, QTableWidgetItem(pct2))
+        savings_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        savings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.overview_content_layout.addWidget(savings_table)
+        self.overview_content_layout.addSpacing(16)
 
     def _refresh_charts(self):
         """Обновить круговую и столбчатую диаграммы по данным из БД."""

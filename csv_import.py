@@ -101,6 +101,15 @@ def _parse_csv_rows(path: str | Path) -> list[tuple]:
     else:
         df["card_number"] = df["card_number"].fillna("").astype(str).str.strip()
 
+    # Операции перевода в Инвесткопилку и перевода округлений считаем накоплениями:
+    # если в описании встречается «Инвесткопилк» или оно равно «Перевод округлений»,
+    # помечаем категорию как «Накопление»
+    desc_lower = df["description"].fillna("").astype(str).str.lower()
+    savings_mask = desc_lower.str.contains("инвесткопилк", na=False) | (
+        desc_lower == "перевод округлений"
+    )
+    df.loc[savings_mask, "category"] = "Накопление"
+
     def _safe_float_col(name: str) -> list:
         if name not in df.columns:
             return [0.0] * len(df)

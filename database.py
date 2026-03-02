@@ -80,6 +80,23 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
+def infer_account_type_from_card(card_number: str) -> str:
+    """Определить тип счёта по окончанию номера карты. По умолчанию «желтый»."""
+    ACCOUNT_TYPES_TRANSACTIONS = ("желтый", "зеленый")
+    card = (card_number or "").strip()
+    if not card:
+        return ACCOUNT_TYPES_TRANSACTIONS[0]
+    # *4963, *5436 → желтый; *6058 → зеленый
+    if card.endswith("6058"):
+        return ACCOUNT_TYPES_TRANSACTIONS[1]
+    if card.endswith("4963") or card.endswith("5436"):
+        return ACCOUNT_TYPES_TRANSACTIONS[0]
+    return ACCOUNT_TYPES_TRANSACTIONS[0]  # fallback
+
+
+ACCOUNT_TYPES_TRANSACTIONS = ("желтый", "зеленый")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Создание всех таблиц при отсутствии."""
     conn.execute(CREATE_TABLE_SQL)
@@ -88,6 +105,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         ("bonuses", "REAL DEFAULT 0"),
         ("rounding_invest", "REAL DEFAULT 0"),
         ("amount_with_rounding", "REAL DEFAULT 0"),
+        ("account_type", "TEXT"),  # NULL для старых записей, миграция заполнит
     ]:
         try:
             conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} {default}")
@@ -113,6 +131,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)",
             (k, v, d),
         )
+    # Миграция: заполнить account_type по номеру карты для записей с NULL
+    cur = conn.execute("SELECT id, card_number FROM transactions WHERE account_type IS NULL OR TRIM(COALESCE(account_type, '')) = ''")
+    for row in cur.fetchall():
+        at = infer_account_type_from_card(row[1] or "")
+        conn.execute("UPDATE transactions SET account_type = ? WHERE id = ?", (at, row[0]))
     conn.commit()
 
 
@@ -120,10 +143,17 @@ def insert_transactions(
     conn: sqlite3.Connection,
     rows: list[tuple],
 ) -> None:
-    """Вставка списка транзакций: (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding)."""
+    """Вставка списка транзакций: (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, account_type). account_type можно опустить — будет вычислен по карте."""
+    extended = []
+    for r in rows:
+        if len(r) >= 9:
+            extended.append(r)
+        else:
+            at = infer_account_type_from_card(r[4] if len(r) > 4 else "")
+            extended.append(r + (at,))
     conn.executemany(
-        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
+        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, account_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        extended,
     )
     conn.commit()
 
@@ -146,6 +176,7 @@ def update_transaction(
     bonuses: Optional[float] = None,
     rounding_invest: Optional[float] = None,
     amount_with_rounding: Optional[float] = None,
+    account_type: Optional[str] = None,
 ) -> bool:
     """Обновление транзакции. Возвращает True при успехе."""
     updates: list[tuple[str, Any]] = []
@@ -165,6 +196,8 @@ def update_transaction(
         updates.append(("rounding_invest", rounding_invest))
     if amount_with_rounding is not None:
         updates.append(("amount_with_rounding", amount_with_rounding))
+    if account_type is not None and account_type in ACCOUNT_TYPES_TRANSACTIONS:
+        updates.append(("account_type", account_type))
     if not updates:
         return True
     set_clause = ", ".join(f"{k} = ?" for k, _ in updates)
@@ -199,10 +232,11 @@ def insert_transaction(
     rounding_invest: float = 0,
     amount_with_rounding: float = 0,
 ) -> int:
-    """Вставка одной транзакции. Возвращает id."""
+    """Вставка одной транзакции. account_type вычисляется по card_number."""
+    at = infer_account_type_from_card(card_number)
     cur = conn.execute(
-        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (date, description, amount, category, card_number or None, bonuses, rounding_invest, amount_with_rounding),
+        "INSERT INTO transactions (date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, account_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (date, description, amount, category, card_number or None, bonuses, rounding_invest, amount_with_rounding, at),
     )
     conn.commit()
     return cur.lastrowid
@@ -257,16 +291,16 @@ def search_transactions(
             params.extend([pattern, pattern, pattern, pattern])
     where = " AND ".join(conditions) if conditions else "1=1"
     cur = conn.execute(
-        f"SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions WHERE {where} ORDER BY date DESC, id DESC",
+        f"SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, COALESCE(account_type, 'желтый') AS account_type FROM transactions WHERE {where} ORDER BY date DESC, id DESC",
         params,
     )
     return [dict(row) for row in cur.fetchall()]
 
 
 def get_all_transactions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Выборка для таблицы: id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding."""
+    """Выборка для таблицы: id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, account_type."""
     cur = conn.execute(
-        "SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding FROM transactions ORDER BY date DESC, id DESC"
+        "SELECT id, date, description, amount, category, card_number, bonuses, rounding_invest, amount_with_rounding, COALESCE(account_type, 'желтый') AS account_type FROM transactions ORDER BY date DESC, id DESC"
     )
     return [dict(row) for row in cur.fetchall()]
 
@@ -360,6 +394,7 @@ def get_expenses_by_category_last_month(
         SELECT category, ABS(SUM(amount)) AS total
         FROM transactions
         WHERE amount < 0
+          AND category <> 'Накопление'
           AND date >= date('now', '-30 days')
         GROUP BY category
         ORDER BY total DESC
@@ -377,6 +412,7 @@ def get_expenses_by_day_last_week(
         SELECT date(date) AS day, ABS(SUM(amount)) AS total
         FROM transactions
         WHERE amount < 0
+          AND category <> 'Накопление'
           AND date >= date('now', '-7 days')
         GROUP BY date(date)
         ORDER BY day
@@ -401,7 +437,7 @@ def get_total_expenses_last_30_days(conn: sqlite3.Connection) -> float:
     cur = conn.execute(
         """
         SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
-        WHERE amount < 0 AND date >= date('now', '-30 days')
+        WHERE amount < 0 AND category <> 'Накопление' AND date >= date('now', '-30 days')
         """
     )
     return float(cur.fetchone()[0] or 0)
@@ -423,7 +459,7 @@ def get_total_expenses_last_90_days(conn: sqlite3.Connection) -> float:
     cur = conn.execute(
         """
         SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
-        WHERE amount < 0 AND date >= date('now', '-90 days')
+        WHERE amount < 0 AND category <> 'Накопление' AND date >= date('now', '-90 days')
         """
     )
     return float(cur.fetchone()[0] or 0)
@@ -438,6 +474,7 @@ def get_expenses_by_category_last_90_days(
         SELECT category, ABS(SUM(amount)) AS total
         FROM transactions
         WHERE amount < 0
+          AND category <> 'Накопление'
           AND date >= date('now', '-90 days')
         GROUP BY category
         ORDER BY total DESC
@@ -465,6 +502,7 @@ def get_expense_sum_by_category_group(
             f"""
             SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
             WHERE amount < 0
+              AND category <> 'Накопление'
               AND date >= date('now', ?)
               AND category IN ({placeholders})
             """,
@@ -482,7 +520,9 @@ def get_expense_trend_weekly(conn: sqlite3.Connection) -> tuple[float, float]:
     cur = conn.execute(
         """
         SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
-        WHERE amount < 0 AND date >= date('now', '-7 days')
+        WHERE amount < 0
+          AND category <> 'Накопление'
+          AND date >= date('now', '-7 days')
         """
     )
     this_week = float(cur.fetchone()[0] or 0)
@@ -490,6 +530,7 @@ def get_expense_trend_weekly(conn: sqlite3.Connection) -> tuple[float, float]:
         """
         SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
         WHERE amount < 0
+          AND category <> 'Накопление'
           AND date >= date('now', '-14 days')
           AND date < date('now', '-7 days')
         """
@@ -648,7 +689,7 @@ def get_income_expenses_by_category(
         """
         SELECT category,
                COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
-               COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS expenses
+               COALESCE(SUM(CASE WHEN amount < 0 AND category <> 'Накопление' THEN ABS(amount) ELSE 0 END), 0) AS expenses
         FROM transactions
         WHERE date(date) >= date(?) AND date(date) <= date(?)
         GROUP BY category
@@ -667,7 +708,7 @@ def get_income_expenses_by_card(
         """
         SELECT COALESCE(card_number, '—') AS card,
                COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
-               COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS expenses
+               COALESCE(SUM(CASE WHEN amount < 0 AND category <> 'Накопление' THEN ABS(amount) ELSE 0 END), 0) AS expenses
         FROM transactions
         WHERE date(date) >= date(?) AND date(date) <= date(?)
         GROUP BY card_number
@@ -678,6 +719,49 @@ def get_income_expenses_by_card(
     return [dict(row) for row in cur.fetchall()]
 
 
+def get_income_expenses_by_account_type(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> list[dict[str, Any]]:
+    """Доходы и расходы по типу счёта за период. Использует account_type из транзакций."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(TRIM(account_type), ''), 'желтый') AS account_type,
+               COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
+               COALESCE(SUM(CASE WHEN amount < 0 AND category <> 'Накопление' THEN ABS(amount) ELSE 0 END), 0) AS expenses
+        FROM transactions
+        WHERE date(date) >= date(?) AND date(date) <= date(?)
+        GROUP BY COALESCE(NULLIF(TRIM(account_type), ''), 'желтый')
+        ORDER BY expenses DESC, income DESC
+        """,
+        (date_from, date_to),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def get_savings_amounts(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> dict[str, float]:
+    """
+    Суммы накоплений по описаниям за период.
+    investkopilka: транзакции «Регулярный перевод в Инвесткопилку»
+    roundings: транзакции «Перевод округлений»
+    """
+    cur = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN description = 'Регулярный перевод в Инвесткопилку' THEN ABS(amount) ELSE 0 END), 0) AS investkopilka,
+            COALESCE(SUM(CASE WHEN description = 'Перевод округлений' THEN ABS(amount) ELSE 0 END), 0) AS roundings
+        FROM transactions
+        WHERE date(date) >= date(?) AND date(date) <= date(?)
+        """,
+        (date_from, date_to),
+    )
+    row = cur.fetchone()
+    if row:
+        return {"investkopilka": float(row[0]), "roundings": float(row[1])}
+    return {"investkopilka": 0.0, "roundings": 0.0}
+
+
 def get_income_expenses_by_month(
     conn: sqlite3.Connection, year: int
 ) -> list[dict[str, Any]]:
@@ -686,7 +770,7 @@ def get_income_expenses_by_month(
         """
         SELECT strftime('%Y-%m', date) AS month,
                COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
-               COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS expenses
+               COALESCE(SUM(CASE WHEN amount < 0 AND category <> 'Накопление' THEN ABS(amount) ELSE 0 END), 0) AS expenses
         FROM transactions
         WHERE strftime('%Y', date) = ?
         GROUP BY strftime('%Y-%m', date)

@@ -11,13 +11,14 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QPushButton,
     QFormLayout,
+    QDateEdit,
 )
 from PyQt5.QtCore import QDate
 from PyQt5.QtGui import QFont
 
 import database as db
 
-CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории", "Супермаркеты", "Фастфуд", "Цифровые товары", "Мобильная связь"]
+CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории", "Супермаркеты", "Фастфуд", "Цифровые товары", "Мобильная связь", "Доход"]
 
 
 class TransactionEditDialog(QDialog):
@@ -29,8 +30,9 @@ class TransactionEditDialog(QDialog):
         self.setWindowTitle("Добавить транзакцию" if mode == "add" else "Редактировать транзакцию")
         self.setMinimumWidth(400)
         layout = QFormLayout()
-        self.date_edit = QLineEdit()
-        self.date_edit.setPlaceholderText("ГГГГ-ММ-ДД или ДД.ММ.ГГГГ")
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDate(QDate.currentDate())
         layout.addRow("Дата:", self.date_edit)
         self.desc_edit = QLineEdit()
         self.desc_edit.setPlaceholderText("Описание")
@@ -47,7 +49,7 @@ class TransactionEditDialog(QDialog):
         self.card_edit.setPlaceholderText("Номер карты (опц.)")
         layout.addRow("Номер карты:", self.card_edit)
         if mode == "edit" and row_data:
-            self.date_edit.setText(str(row_data.get("date", ""))[:10])
+            self._set_date_from_str(str(row_data.get("date", ""))[:19])
             self.desc_edit.setText(str(row_data.get("description", "")))
             self.amount_spin.setValue(float(row_data.get("amount", 0)))
             cat = row_data.get("category") or "Без категории"
@@ -65,24 +67,22 @@ class TransactionEditDialog(QDialog):
         layout.addRow(btns)
         self.setLayout(layout)
 
-    def _parse_date(self, s):
+    def _set_date_from_str(self, s):
+        """Установить дату в QDateEdit из строки (поддерживает форматы как в БД)."""
         from datetime import datetime
-        s = s.strip()
+        s = (s or "").strip()[:19]
         if not s:
-            return None
+            return
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y"):
             try:
-                dt = datetime.strptime(s[:19], fmt)
-                return dt.strftime("%Y-%m-%d %H:%M:%S")
+                dt = datetime.strptime(s, fmt)
+                self.date_edit.setDate(QDate(dt.year, dt.month, dt.day))
+                return
             except ValueError:
                 continue
-        return None
 
     def _save(self):
-        date_str = self._parse_date(self.date_edit.text())
-        if not date_str:
-            self.date_edit.setFocus()
-            return
+        date_str = self.date_edit.date().toString("yyyy-MM-dd") + " 00:00:00"
         desc = self.desc_edit.text().strip() or "—"
         amount = self.amount_spin.value()
         cat = self.category_combo.currentText() or "Без категории"

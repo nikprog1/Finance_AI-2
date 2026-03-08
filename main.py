@@ -48,8 +48,9 @@ import database as db
 import csv_import
 import financial_agent
 from models_dialog import ModelsManagementWidget
+from transaction_dialog import TransactionEditDialog
 
-CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории"]
+CATEGORIES = ["Продукты", "Транспорт", "Развлечения", "Кафе", "Без категории", "Супермаркеты", "Фастфуд", "Цифровые товары", "Мобильная связь", "Доход"]
 
 
 class GoalWorker(QObject):
@@ -175,6 +176,9 @@ class MainWindow(QMainWindow):
         search_btn = QPushButton("Поиск")
         search_btn.clicked.connect(self._on_search)
         filter_row.addWidget(search_btn)
+        add_btn = QPushButton("Добавить")
+        add_btn.clicked.connect(self._on_add_transaction)
+        filter_row.addWidget(add_btn)
         del_btn = QPushButton("Удалить")
         del_btn.clicked.connect(self._on_delete_transaction)
         filter_row.addWidget(del_btn)
@@ -291,7 +295,7 @@ class MainWindow(QMainWindow):
         self.overview_content_layout = QVBoxLayout(self.overview_content)
         self.overview_scroll.setWidget(self.overview_content)
         overview_layout.addWidget(self.overview_scroll)
-        self.tabs.addTab(self.overview_tab, "Общее")
+        self.tabs.addTab(self.overview_tab, "Отчеты")
 
         # Вкладка «Настройки»
         self.settings_tab = QWidget()
@@ -437,8 +441,8 @@ class MainWindow(QMainWindow):
                 it = self.model.item(r, c)
                 if not it:
                     continue
-                # Разрешаем редактировать только Описание, Категорию и Тип счёта
-                if c in (2, 4, 7):
+                # Разрешаем редактировать Описание, Сумму, Категорию и Тип счёта
+                if c in (2, 3, 4, 7):
                     it.setEditable(True)
                 else:
                     it.setEditable(False)
@@ -522,12 +526,21 @@ class MainWindow(QMainWindow):
         self._last_goal_result = (text or "", from_ai)
         self._refresh_recommendations()
 
+    def _on_add_transaction(self):
+        """Открыть диалог добавления транзакции."""
+        dlg = TransactionEditDialog(self, conn=self._conn, mode="add")
+        if dlg.exec_() == dlg.Accepted:
+            self._refresh_filter_combos()
+            self._reload_table()
+            self._refresh_charts()
+            self.statusBar().showMessage("Транзакция добавлена")
+
     def _on_transaction_data_changed(self, top_left, bottom_right, roles):
-        """Auto-save при изменении описания, категории или типа счёта."""
+        """Auto-save при изменении описания, суммы, категории или типа счёта."""
         if Qt.EditRole not in roles:
             return
         col = top_left.column()
-        if col not in (2, 4, 7):
+        if col not in (2, 3, 4, 7):
             return
         row = top_left.row()
         id_index = self.model.index(row, 0)
@@ -544,6 +557,12 @@ class MainWindow(QMainWindow):
             if not desc:
                 desc = "—"
             kwargs["description"] = desc
+        elif col == 3:
+            try:
+                val_str = str(self.model.data(top_left, Qt.EditRole) or "0").replace(",", ".")
+                kwargs["amount"] = float(val_str)
+            except (ValueError, TypeError):
+                return
         elif col == 4:
             cat = (self.model.data(top_left, Qt.EditRole) or "Без категории").strip()
             if not cat:
@@ -752,7 +771,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Удалено записей: {n}")
 
     def _load_overview(self):
-        """Загрузить вкладку «Общее»: по категориям, по картам, по месяцам."""
+        """Загрузить вкладку «Отчеты»: по категориям, по картам, по месяцам."""
         year_val = self.overview_year_combo.currentData()
         if year_val is not None:
             date_from = f"{year_val}-01-01"

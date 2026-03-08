@@ -1,0 +1,18 @@
+{
+  "request_type": "goal_achievement",
+  "period_filter": "week|month|quarter",
+  "goals": [
+    {
+      "target_amount": 50000,
+      "name": "подушка безопасности|отпуск|техника|обучение",
+      "current_amount": 12000,
+      "deadline_period": "week|month|quarter",
+      "priority": "high|medium|low"
+    }
+  ],
+  "context": {
+    "available_monthly_surplus": 5000,
+    "risk_tolerance": "low|medium|high",
+    "tools_available": ["накопительный счёт", "инвестиции", "подработка"]
+  }
+}

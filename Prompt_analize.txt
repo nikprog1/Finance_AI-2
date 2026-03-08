@@ -1,0 +1,16 @@
+
+{
+  "request_type": "expense_optimization",
+  "period_filter": "week|month|quarter",
+  "transactions": [
+    {
+      "amount": 1500,
+      "category": "еда|транспорт|подписки|развлечения|здоровье|ЖКХ|кредиты|прочее",
+      "period": "week|month|quarter"
+    }
+  ],
+  "context": {
+    "mandatory_categories": ["ЖКХ", "кредиты", "лекарства"],
+    "focus_areas": []
+  }
+}

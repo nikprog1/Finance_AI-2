@@ -34,6 +34,8 @@ Name: "russian"; MessagesFile: "compiler:Languages\\Russian.isl"
 [Files]
 ; Основной exe, собранный PyInstaller (one-file)
 Source: "{#MyAppSourceDir}\\{#MyAppExeName}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+; Тестовый CSV рядом с exe (в корне проекта)
+Source: "CSV_test.csv"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Ярлык запуска программы

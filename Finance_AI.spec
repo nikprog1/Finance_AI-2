@@ -20,7 +20,7 @@ a = Analysis(
     scripts=["main.py"],
     pathex=[],
     binaries=[],
-    datas=_mpl_datas,
+    datas=_mpl_datas + [("CSV_test.csv", ".")],
     hiddenimports=[
         "database",
         "csv_import",

@@ -57,9 +57,15 @@ def build_llm_metrics(
             "change_percent": change_pct,
         }
     savings = max(0.0, income - expenses)
+    if date_from and date_to:
+        d1 = datetime.strptime(date_from[:10], "%Y-%m-%d")
+        d2 = datetime.strptime(date_to[:10], "%Y-%m-%d")
+        period_str = f"{d1.strftime('%d.%m.%Y')} — {d2.strftime('%d.%m.%Y')}"
+    else:
+        period_str = "последние 30 дней"
     metrics = {
         "period_days": period_days,
-        "period": f"{date_from} — {date_to}" if (date_from and date_to) else "последние 30 дней",
+        "period": period_str,
         "income_rub": round(income, 2),
         "expenses_rub": round(expenses, 2),
         "savings_rub": round(savings, 2),

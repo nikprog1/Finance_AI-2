@@ -10,30 +10,61 @@ import database as db
 from agent_rules import ALL_RULES, CATEGORY_GROUPS, Recommendation
 
 
-def build_llm_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
+def build_llm_metrics(
+    conn: sqlite3.Connection,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
     """
     Собирает анонимизированные метрики для LLM (только агрегаты, без сырых транзакций).
+    Если заданы date_from и date_to — берутся данные за этот период (обычно с вкладки «Отчеты»).
+    Иначе — за последние 30 дней.
     """
-    income = db.get_income_last_30_days(conn)
-    expenses = db.get_total_expenses_last_30_days(conn)
+    if date_from and date_to:
+        income = db.get_income_for_period(conn, date_from, date_to)
+        expenses = db.get_total_expenses_for_period(conn, date_from, date_to)
+        expense_by_group = db.get_expense_sum_by_category_group_for_period(
+            conn, date_from, date_to, CATEGORY_GROUPS
+        )
+        first_half, second_half, change_pct = db.get_expense_trend_for_period(
+            conn, date_from, date_to
+        )
+        top_cats = db.get_expenses_by_category_for_period(
+            conn, date_from, date_to
+        )[:5]
+        from datetime import datetime
+        d1 = datetime.strptime(date_from[:10], "%Y-%m-%d")
+        d2 = datetime.strptime(date_to[:10], "%Y-%m-%d")
+        period_days = max(1, (d2 - d1).days)
+        expense_trend = {
+            "this_week_rub": round(second_half, 2),
+            "last_week_rub": round(first_half, 2),
+            "change_percent": change_pct,
+        }
+    else:
+        income = db.get_income_last_30_days(conn)
+        expenses = db.get_total_expenses_last_30_days(conn)
+        expense_by_group = db.get_expense_sum_by_category_group(
+            conn, days=30, category_groups=CATEGORY_GROUPS
+        )
+        this_week, last_week = db.get_expense_trend_weekly(conn)
+        change_pct = round((this_week - last_week) / last_week * 100, 1) if last_week else 0.0
+        top_cats = db.get_expenses_by_category_last_month(conn)[:5]
+        period_days = 30
+        expense_trend = {
+            "this_week_rub": round(this_week, 2),
+            "last_week_rub": round(last_week, 2),
+            "change_percent": change_pct,
+        }
     savings = max(0.0, income - expenses)
-    expense_by_group = db.get_expense_sum_by_category_group(
-        conn, days=30, category_groups=CATEGORY_GROUPS
-    )
-    this_week, last_week = db.get_expense_trend_weekly(conn)
-    change_pct = round((this_week - last_week) / last_week * 100, 1) if last_week else 0.0
-    top_cats = db.get_expenses_by_category_last_month(conn)[:5]
     metrics = {
-        "period_days": 30,
+        "period_days": period_days,
+        "period": f"{date_from} — {date_to}" if (date_from and date_to) else "последние 30 дней",
         "income_rub": round(income, 2),
         "expenses_rub": round(expenses, 2),
         "savings_rub": round(savings, 2),
         "expenses_by_group": {k: round(v, 2) for k, v in expense_by_group.items()},
-        "expense_trend": {
-            "this_week_rub": round(this_week, 2),
-            "last_week_rub": round(last_week, 2),
-            "change_percent": change_pct,
-        },
+        "expense_trend": expense_trend,
         "top_categories": [{"name": c, "amount_rub": round(a, 2)} for c, a in top_cats],
     }
     return metrics

@@ -512,6 +512,105 @@ def get_expense_sum_by_category_group(
     return result
 
 
+def get_income_for_period(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> float:
+    """Сумма доходов (amount > 0) за период."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount), 0) FROM transactions
+        WHERE amount > 0 AND date(date) >= date(?) AND date(date) <= date(?)
+        """,
+        (date_from, date_to),
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
+def get_total_expenses_for_period(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> float:
+    """Сумма расходов (amount < 0, по модулю) за период, без Накопления."""
+    cur = conn.execute(
+        """
+        SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+        WHERE amount < 0 AND category <> 'Накопление'
+          AND date(date) >= date(?) AND date(date) <= date(?)
+        """,
+        (date_from, date_to),
+    )
+    return float(cur.fetchone()[0] or 0)
+
+
+def get_expenses_by_category_for_period(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> list[tuple[str, float]]:
+    """Агрегат по категориям за период, только расходы. Сумма по модулю."""
+    cur = conn.execute(
+        """
+        SELECT category, ABS(SUM(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+          AND category <> 'Накопление'
+          AND date(date) >= date(?) AND date(date) <= date(?)
+        GROUP BY category
+        ORDER BY total DESC
+        """,
+        (date_from, date_to),
+    )
+    return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def get_expense_sum_by_category_group_for_period(
+    conn: sqlite3.Connection,
+    date_from: str,
+    date_to: str,
+    category_groups: dict[str, list[str]],
+) -> dict[str, float]:
+    """Сумма расходов по группам категорий за период."""
+    result: dict[str, float] = {name: 0.0 for name in category_groups}
+    for group_name, categories in category_groups.items():
+        if not categories:
+            continue
+        placeholders = ",".join("?" * len(categories))
+        cur = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(ABS(amount)), 0) FROM transactions
+            WHERE amount < 0
+              AND category <> 'Накопление'
+              AND date(date) >= date(?) AND date(date) <= date(?)
+              AND category IN ({placeholders})
+            """,
+            (date_from, date_to) + tuple(categories),
+        )
+        result[group_name] = float(cur.fetchone()[0] or 0)
+    return result
+
+
+def get_expense_trend_for_period(
+    conn: sqlite3.Connection, date_from: str, date_to: str
+) -> tuple[float, float, float]:
+    """
+    Тренд расходов: первая и вторая половина периода, изменение в %.
+    Возвращает (первая_половина, вторая_половина, change_percent).
+    """
+    from datetime import datetime as dt, timedelta
+    try:
+        d1 = dt.strptime(date_from[:10], "%Y-%m-%d")
+        d2 = dt.strptime(date_to[:10], "%Y-%m-%d")
+        delta = (d2 - d1).days
+    except (ValueError, TypeError):
+        return 0.0, 0.0, 0.0
+    if delta < 2:
+        return 0.0, 0.0, 0.0
+    mid_days = delta // 2
+    mid_end = (d1 + timedelta(days=mid_days)).strftime("%Y-%m-%d")
+    mid_start = (d1 + timedelta(days=mid_days + 1)).strftime("%Y-%m-%d")
+    first = get_total_expenses_for_period(conn, date_from, mid_end)
+    second = get_total_expenses_for_period(conn, mid_start, date_to)
+    change_pct = round((second - first) / first * 100, 1) if first else 0.0
+    return first, second, change_pct
+
+
 def get_expense_trend_weekly(conn: sqlite3.Connection) -> tuple[float, float]:
     """
     (сумма расходов за последние 7 дней, сумма расходов за 7 дней до этого).

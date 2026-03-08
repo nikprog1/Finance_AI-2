@@ -484,10 +484,20 @@ class MainWindow(QMainWindow):
                 self.recommendations_content_layout.addWidget(why_label)
                 self.recommendations_content_layout.addSpacing(12)
 
+    def _get_overview_period(self) -> tuple[str, str]:
+        """Период с вкладки «Отчеты» (год или произвольный интервал)."""
+        year_val = self.overview_year_combo.currentData()
+        if year_val is not None:
+            return f"{year_val}-01-01", f"{year_val}-12-31"
+        date_from = self.overview_date_from.date().toString("yyyy-MM-dd")
+        date_to = self.overview_date_to.date().toString("yyyy-MM-dd")
+        return date_from, date_to
+
     def _on_advice_request(self):
         """Запрос рекомендаций «как сократить расходы» (в фоне — ИИ)."""
         from financial_agent import build_llm_metrics
-        metrics = build_llm_metrics(self._conn)
+        date_from, date_to = self._get_overview_period()
+        metrics = build_llm_metrics(self._conn, date_from=date_from, date_to=date_to)
         recs = financial_agent.get_recommendations(self._conn)
         rule_text = "\n\n".join(f"{r.text}\n{r.why}" for r in recs) if recs else "Недостаточно данных для анализа."
         api_config = None

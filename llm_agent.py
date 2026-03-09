@@ -38,6 +38,27 @@ EXPENSE_ADVICE_USER_PROMPT = """Метрики пользователя (ано�
 
 Проанализируй расходы. Начни ответ с указания отчётного периода в краткой форме (начальная и конечная даты из поля period). Предложи 1–3 конкретных шага по оптимизации. Для каждой рекомендации укажи категорию, действие и ожидаемый эффект (небольшой/заметный/значительный). Обязательные расходы (ЖКХ, кредиты, лекарства и т.п.) не предлагай сокращать. Не придумывай данные — опирайся только на метрики."""
 
+GOALS_PORTFOLIO_SYSTEM_PROMPT = """Ты — опытный личный финансовый советник и стратег по достижению целей.
+Твоя задача — проанализировать список финансовых целей пользователя и предложить короткий реалистичный план их достижения.
+Правила: используй только данные из метрик; не выдумывай числа; не предлагай инвестиционные, кредитные, юридические или медицинские советы; не упоминай бренды; пиши на русском; ответ должен быть коротким и практичным."""
+
+GOALS_PORTFOLIO_USER_PROMPT = """Вводные данные по финансовым целям и контексту пользователя:
+
+{json_metrics}
+
+Выполни следующие шаги:
+1. Оцени реалистичность целей с учётом сроков, текущего прогресса и доступного бюджета.
+2. Дай базовый план действий: сколько примерно нужно откладывать в месяц по ключевым целям.
+3. Предложи 3-5 способов ускорить достижение целей.
+4. Укажи главные риски и необходимость финансовой подушки.
+5. Если целей много, предложи краткую очередность их достижения.
+
+Требования к ответу:
+- короткий ответ, несколько предложений;
+- начни с отчётного периода из поля report_period;
+- если цели выглядят нереалистично, скажи об этом прямо, но без резких формулировок;
+- не используй длинные списки и не повторяй исходные данные целиком."""
+
 
 def get_setup_instructions() -> str:
     """Инструкция по настройке Cloud API для показа пользователю."""
@@ -234,6 +255,81 @@ class CloudAgent:
         except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
             self._failure_reason = str(e)
             logger.exception("Ошибка expense-advice API: %s", e)
+            return None
+
+    def generate_goals_plan_advice(
+        self, metrics: dict[str, Any], api_config: dict[str, Any] | None = None
+    ) -> str | None:
+        """
+        Генерация краткого ИИ-анализа по всем финансовым целям пользователя.
+        api_config: опционально из БД — api_url, api_key, model, timeout. Иначе — из .env.
+        """
+        if api_config:
+            api_key = (api_config.get("api_key") or "").strip()
+            api_url = api_config.get("api_url") or LLM_API_URL
+            model = api_config.get("model") or LLM_MODEL
+            timeout = int(api_config.get("timeout") or LLM_TIMEOUT)
+        else:
+            api_key = (LLM_API_KEY or os.environ.get("OPENROUTER_API_KEY", "") or "").strip()
+            api_url = LLM_API_URL
+            model = LLM_MODEL
+            timeout = LLM_TIMEOUT
+        if not api_key:
+            self._failure_reason = "API-ключ не найден. Добавьте модель в Настройках или задайте LLM_API_KEY в .env"
+            logger.warning(self._failure_reason)
+            return None
+
+        json_metrics = json.dumps(metrics, ensure_ascii=False, indent=2)
+        user_content = GOALS_PORTFOLIO_USER_PROMPT.format(json_metrics=json_metrics)
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": GOALS_PORTFOLIO_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 260,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            logger.debug("Отправка goals-plan запроса к %s", api_url)
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(api_url, headers=headers, json=payload)
+
+            if response.status_code == 402:
+                self._failure_reason = "Недостаточно кредитов"
+                return None
+            if response.status_code == 404:
+                self._failure_reason = f"Модель не найдена: {model}"
+                return None
+            if response.status_code in (400, 429):
+                self._failure_reason = f"HTTP {response.status_code}"
+                return None
+
+            response.raise_for_status()
+            data = response.json()
+            text = ""
+            if "choices" in data and data["choices"]:
+                text = (data["choices"][0].get("message", {}).get("content") or "").strip()
+            if text:
+                logger.info("Cloud API: анализ целей получен, %d символов", len(text))
+                self._failure_reason = ""
+                return text
+            self._failure_reason = "Пустой ответ от API"
+            return None
+
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            self._failure_reason = "Нет подключения к интернету"
+            logger.warning(self._failure_reason)
+            return None
+        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
+            self._failure_reason = str(e)
+            logger.exception("Ошибка goals-plan API: %s", e)
             return None
 
 

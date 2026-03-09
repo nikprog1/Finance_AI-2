@@ -101,6 +101,127 @@ def build_goal_metrics(
     }
 
 
+def build_goals_portfolio_metrics(
+    conn: sqlite3.Connection,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    """
+    Собирает агрегированный payload по всем финансовым целям пользователя.
+    Использует период со вкладки «Отчеты» для общего финансового контекста.
+    """
+    summary = build_llm_metrics(conn, date_from=date_from, date_to=date_to)
+    goals = db.get_all_goals(conn)
+    today = date.today()
+    goals_payload: list[dict[str, Any]] = []
+
+    for goal in goals:
+        target_amount = round(float(goal.get("target_amount", 0) or 0), 2)
+        current_progress = round(float(goal.get("current_progress", 0) or 0), 2)
+        remaining_amount = round(max(0.0, target_amount - current_progress), 2)
+        start_date = (goal.get("start_date") or "")[:10]
+        end_date = (goal.get("end_date") or "")[:10]
+        progress_pct = round(current_progress / target_amount * 100, 1) if target_amount > 0 else 0.0
+
+        months_left = 0
+        target_date_str = end_date
+        if target_date_str:
+            try:
+                end = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+                if end > today:
+                    months_left = max(1, (end.year - today.year) * 12 + (end.month - today.month))
+            except ValueError:
+                months_left = 0
+
+        monthly_required = round(remaining_amount / months_left, 2) if months_left else 0.0
+        status = "достигнута" if remaining_amount <= 0 else "в процессе"
+        if target_date_str:
+            try:
+                end = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+                if end <= today and remaining_amount > 0:
+                    status = "срок истек"
+            except ValueError:
+                pass
+
+        goals_payload.append({
+            "name": str(goal.get("description") or "Без названия"),
+            "target_amount": target_amount,
+            "current_amount": current_progress,
+            "remaining_amount": remaining_amount,
+            "start_date": start_date,
+            "deadline": end_date,
+            "months_left": months_left,
+            "required_per_month": monthly_required,
+            "progress_percent": progress_pct,
+            "status": status,
+        })
+
+    period_days = int(summary.get("period_days") or 30)
+    month_factor = max(1.0, period_days / 30.0)
+    monthly_income = round(float(summary.get("income_rub") or 0) / month_factor, 2)
+    monthly_expenses = round(float(summary.get("expenses_rub") or 0) / month_factor, 2)
+    monthly_surplus = round(max(0.0, monthly_income - monthly_expenses), 2)
+    total_required_per_month = round(sum(goal["required_per_month"] for goal in goals_payload), 2)
+
+    return {
+        "report_period": summary.get("period"),
+        "goals_count": len(goals_payload),
+        "goals": goals_payload,
+        "context": {
+            "income_rub": summary.get("income_rub", 0.0),
+            "expenses_rub": summary.get("expenses_rub", 0.0),
+            "savings_rub": summary.get("savings_rub", 0.0),
+            "estimated_monthly_income_rub": monthly_income,
+            "estimated_monthly_expenses_rub": monthly_expenses,
+            "available_monthly_surplus_rub": monthly_surplus,
+            "total_required_per_month_rub": total_required_per_month,
+            "top_categories": summary.get("top_categories", []),
+        },
+    }
+
+
+def build_goals_portfolio_fallback(
+    conn: sqlite3.Connection,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    """
+    Краткий rule-based текст на случай, если облачный ИИ недоступен.
+    """
+    payload = build_goals_portfolio_metrics(conn, date_from=date_from, date_to=date_to)
+    goals = payload.get("goals", [])
+    if not goals:
+        return "Добавьте хотя бы одну финансовую цель, чтобы получить анализ плана."
+
+    nearest_goal = min(
+        goals,
+        key=lambda item: (
+            item.get("deadline") == "",
+            item.get("deadline") or "9999-12-31",
+        ),
+    )
+    surplus = float(payload["context"].get("available_monthly_surplus_rub", 0.0) or 0.0)
+    total_required = float(payload["context"].get("total_required_per_month_rub", 0.0) or 0.0)
+    feasibility = "план выглядит напряженным"
+    if total_required <= 0:
+        feasibility = "активные накопления по целям сейчас не требуются"
+    elif surplus >= total_required:
+        feasibility = "план выглядит реалистичным"
+
+    nearest_deadline = nearest_goal.get("deadline") or "без срока"
+    if nearest_deadline != "без срока":
+        try:
+            nearest_deadline = datetime.strptime(nearest_deadline, "%Y-%m-%d").strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    nearest_amount = float(nearest_goal.get("required_per_month", 0.0) or 0.0)
+    return (
+        f"Период: {payload.get('report_period')}. "
+        f"Ближайшая цель «{nearest_goal.get('name')}» требует около {nearest_amount:,.0f} ₽ в месяц до {nearest_deadline}. "
+        f"Суммарно по всем целям нужно около {total_required:,.0f} ₽ в месяц, при этом {feasibility}."
+    ).replace(",", " ")
+
+
 def calc_goal_monthly_savings(
     target_amount: float,
     target_date: str,

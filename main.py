@@ -81,6 +81,34 @@ class GoalWorker(QObject):
             self.finished.emit((self.rule_text, False))
 
 
+class GoalsPlanWorker(QObject):
+    """Воркер для отдельного ИИ-анализа всех финансовых целей."""
+    finished = pyqtSignal(object)  # tuple[str, bool]: (текст, from_ai)
+
+    def __init__(self):
+        super().__init__()
+        self.payload = None
+        self.fallback_text = ""
+        self.consent = False
+        self.api_config = None
+
+    def do_work(self):
+        if not self.consent:
+            self.finished.emit((self.fallback_text, False))
+            return
+        try:
+            from llm_agent import get_agent
+            agent = get_agent()
+            result = agent.generate_goals_plan_advice(self.payload, api_config=self.api_config)
+            if result:
+                self.finished.emit((result, True))
+            else:
+                self.finished.emit((self.fallback_text, False))
+        except Exception as e:
+            logger.exception("Goals plan worker: %s", e)
+            self.finished.emit((self.fallback_text, False))
+
+
 class AccountTypeDelegate(QStyledItemDelegate):
     """Делегат: при редактировании ячейки «Тип счёта» показывается QComboBox с «желтый», «зеленый»."""
 
@@ -229,6 +257,11 @@ class MainWindow(QMainWindow):
         self._goal_worker.moveToThread(self._goal_thread)
         self._goal_thread.started.connect(self._goal_worker.do_work)
         self._goal_worker.finished.connect(self._on_goal_finished)
+        self._goals_plan_thread = QThread()
+        self._goals_plan_worker = GoalsPlanWorker()
+        self._goals_plan_worker.moveToThread(self._goals_plan_thread)
+        self._goals_plan_thread.started.connect(self._goals_plan_worker.do_work)
+        self._goals_plan_worker.finished.connect(self._on_goals_plan_finished)
 
         self.tabs.addTab(self.table_tab, "Транзакции")
 
@@ -257,6 +290,30 @@ class MainWindow(QMainWindow):
         ])
         self.goals_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         goals_layout.addWidget(self.goals_table)
+        self.goals_analysis_panel = QFrame()
+        self.goals_analysis_panel.setFrameShape(QFrame.StyledPanel)
+        goals_ai_layout = QVBoxLayout(self.goals_analysis_panel)
+        goals_ai_title = QLabel("Стратегия по целям")
+        goals_ai_title.setFont(QFont(goals_ai_title.font().family(), 10, QFont.Bold))
+        goals_ai_layout.addWidget(goals_ai_title)
+        goals_ai_hint = QLabel(
+            "Анализ строится по всем целям сразу. Финансовый контекст берётся из периода на вкладке «Отчеты»."
+        )
+        goals_ai_hint.setWordWrap(True)
+        goals_ai_hint.setStyleSheet("color: gray; font-size: 11px;")
+        goals_ai_layout.addWidget(goals_ai_hint)
+        self.goals_analysis_scroll = QScrollArea()
+        self.goals_analysis_scroll.setWidgetResizable(True)
+        self.goals_analysis_content = QWidget()
+        self.goals_analysis_content_layout = QVBoxLayout(self.goals_analysis_content)
+        self.goals_analysis_content_layout.setAlignment(Qt.AlignTop)
+        self.goals_analysis_scroll.setWidget(self.goals_analysis_content)
+        self.goals_analysis_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        goals_ai_layout.addWidget(self.goals_analysis_scroll, 1)
+        self.goals_analysis_btn = QPushButton("Анализ целей ИИ")
+        self.goals_analysis_btn.clicked.connect(self._on_goals_analysis_request)
+        goals_ai_layout.addWidget(self.goals_analysis_btn)
+        goals_layout.addWidget(self.goals_analysis_panel)
         self.tabs.addTab(self.goals_tab, "Финансовые цели")
 
         # Вкладка «Общее»
@@ -370,11 +427,14 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         self._last_goal_result = None  # (text, from_ai) для отображения в «Финансовые советы»
+        self._last_goals_plan_result = None  # (text, from_ai) для вкладки «Финансовые цели»
 
         db.remove_duplicates(self._conn)
         self._refresh_filter_combos()
         self._reload_table()
+        self._load_goals()
         self._refresh_recommendations()
+        self._refresh_goals_analysis()
         self._refresh_charts()
         theme = db.get_setting(conn, "ui_theme") or "light"
         self._apply_theme(theme)
@@ -484,6 +544,36 @@ class MainWindow(QMainWindow):
                 self.recommendations_content_layout.addWidget(why_label)
                 self.recommendations_content_layout.addSpacing(12)
 
+    def _refresh_goals_analysis(self):
+        """Обновить отдельный блок ИИ-анализа финансовых целей."""
+        while self.goals_analysis_content_layout.count():
+            child = self.goals_analysis_content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        goals = db.get_all_goals(self._conn)
+        if self._last_goals_plan_result:
+            text, from_ai = self._last_goals_plan_result
+            title = QLabel("Сгенерировано ИИ" if from_ai else "Краткий расчёт без облачного ИИ")
+            title.setFont(QFont(title.font().family(), 9, QFont.Bold))
+            title.setStyleSheet("color: gray;" if not from_ai else "")
+            self.goals_analysis_content_layout.addWidget(title)
+            text_label = QLabel(text)
+            text_label.setWordWrap(True)
+            text_label.setStyleSheet("font-size: 11px;")
+            self.goals_analysis_content_layout.addWidget(text_label)
+            return
+
+        hint_text = (
+            "Добавьте хотя бы одну финансовую цель, чтобы получить стратегию."
+            if not goals
+            else "Нажмите «Анализ целей ИИ», чтобы получить короткий план по всем целям сразу."
+        )
+        hint = QLabel(hint_text)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        self.goals_analysis_content_layout.addWidget(hint)
+
     def _get_overview_period(self) -> tuple[str, str]:
         """Период с вкладки «Отчеты» (год или произвольный интервал)."""
         year_val = self.overview_year_combo.currentData()
@@ -493,13 +583,8 @@ class MainWindow(QMainWindow):
         date_to = self.overview_date_to.date().toString("yyyy-MM-dd")
         return date_from, date_to
 
-    def _on_advice_request(self):
-        """Запрос рекомендаций «как сократить расходы» (в фоне — ИИ)."""
-        from financial_agent import build_llm_metrics
-        date_from, date_to = self._get_overview_period()
-        metrics = build_llm_metrics(self._conn, date_from=date_from, date_to=date_to)
-        recs = financial_agent.get_recommendations(self._conn)
-        rule_text = "\n\n".join(f"{r.text}\n{r.why}" for r in recs) if recs else "Недостаточно данных для анализа."
+    def _get_active_api_config(self) -> dict | None:
+        """Получить активную модель и ключ для облачного ИИ."""
         api_config = None
         models = db.get_active_models(self._conn)
         if models:
@@ -517,6 +602,16 @@ class MainWindow(QMainWindow):
                     "model": m.get("name"),
                     "timeout": int(db.get_setting(self._conn, "request_timeout") or 60),
                 }
+        return api_config
+
+    def _on_advice_request(self):
+        """Запрос рекомендаций «как сократить расходы» (в фоне — ИИ)."""
+        from financial_agent import build_llm_metrics
+        date_from, date_to = self._get_overview_period()
+        metrics = build_llm_metrics(self._conn, date_from=date_from, date_to=date_to)
+        recs = financial_agent.get_recommendations(self._conn)
+        rule_text = "\n\n".join(f"{r.text}\n{r.why}" for r in recs) if recs else "Недостаточно данных для анализа."
+        api_config = self._get_active_api_config()
         self.advice_request_btn.setEnabled(False)
         self._goal_worker.metrics = metrics
         self._goal_worker.rule_text = rule_text
@@ -535,6 +630,41 @@ class MainWindow(QMainWindow):
             text, from_ai = str(payload), False
         self._last_goal_result = (text or "", from_ai)
         self._refresh_recommendations()
+
+    def _on_goals_analysis_request(self):
+        """Запрос отдельного ИИ-анализа по всем финансовым целям."""
+        date_from, date_to = self._get_overview_period()
+        payload = financial_agent.build_goals_portfolio_metrics(
+            self._conn, date_from=date_from, date_to=date_to
+        )
+        if not payload.get("goals"):
+            self._last_goals_plan_result = None
+            self._refresh_goals_analysis()
+            self.statusBar().showMessage("Добавьте хотя бы одну цель для анализа")
+            return
+        fallback_text = financial_agent.build_goals_portfolio_fallback(
+            self._conn, date_from=date_from, date_to=date_to
+        )
+        api_config = self._get_active_api_config()
+        self.goals_analysis_btn.setEnabled(False)
+        self._goals_plan_worker.payload = payload
+        self._goals_plan_worker.fallback_text = fallback_text
+        self._goals_plan_worker.consent = self.advice_consent_check.isChecked()
+        self._goals_plan_worker.api_config = api_config
+        self._goals_plan_thread.start()
+
+    def _on_goals_plan_finished(self, payload):
+        """Показать результат отдельного анализа финансовых целей."""
+        self._goals_plan_thread.quit()
+        self._goals_plan_thread.wait()
+        self.goals_analysis_btn.setEnabled(True)
+        try:
+            text, from_ai = payload
+        except (TypeError, ValueError):
+            text, from_ai = str(payload), False
+        self._last_goals_plan_result = (text or "", from_ai)
+        self._refresh_goals_analysis()
+        self.statusBar().showMessage("Анализ целей обновлён")
 
     def _on_add_transaction(self):
         """Открыть диалог добавления транзакции."""
@@ -678,11 +808,13 @@ class MainWindow(QMainWindow):
             pb.setMaximumWidth(120)
             self.goals_table.setCellWidget(i, 6, pb)
             self.goals_table.item(i, 0).setData(Qt.UserRole, g.get("id"))
+        self._refresh_goals_analysis()
 
     def _on_add_goal(self):
         from goal_dialog import GoalEditDialog
         dlg = GoalEditDialog(self, conn=self._conn, mode="add")
         if dlg.exec_() == dlg.Accepted:
+            self._last_goals_plan_result = None
             self._load_goals()
 
     def _on_edit_goal(self):
@@ -699,6 +831,7 @@ class MainWindow(QMainWindow):
         from goal_dialog import GoalEditDialog
         dlg = GoalEditDialog(self, conn=self._conn, mode="edit", goal_data=goal)
         if dlg.exec_() == dlg.Accepted:
+            self._last_goals_plan_result = None
             self._load_goals()
 
     def _on_delete_goal(self):
@@ -715,6 +848,7 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.Yes:
             return
         if db.delete_goal(self._conn, int(gid)):
+            self._last_goals_plan_result = None
             self._load_goals()
 
     def _save_setting(self, key: str, value: str):
